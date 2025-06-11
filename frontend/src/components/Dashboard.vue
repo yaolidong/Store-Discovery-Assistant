@@ -54,6 +54,17 @@
             <span v-if="shop.status === 'confirmed'" class="shop-address-confirmed">
               📍 {{ shop.address }} (Confirmed)
             </span>
+            <div v-if="shop.status === 'confirmed'" class="shop-stay-duration">
+              <label :for="'stayDuration-' + shop.id" class="stay-duration-label">Stay (minutes):</label>
+              <input
+                type="number"
+                :id="'stayDuration-' + shop.id"
+                v-model.number="shop.stayDurationMinutes"
+                min="0"
+                placeholder="0"
+                class="stay-duration-input"
+              />
+            </div>
           </div>
           <div class="shop-item-actions">
             <button
@@ -144,6 +155,34 @@
 
     <hr class="separator"/>
 
+    <!-- Generated Schedule Display -->
+    <div v-if="displayableSchedule && displayableSchedule.length > 0" class="schedule-display-section">
+      <h3>Generated Schedule (Starts at {{ formatTime(new Date(new Date().setHours(...defaultStartTime.split(':').map(Number)))) }})</h3>
+      <ul class="schedule-list">
+        <li v-for="(item, index) in displayableSchedule" :key="index" class="schedule-item">
+          <div v-if="item.type === 'departure'" class="schedule-event departure-event">
+            <span class="event-time">{{ formatTime(item.time) }}</span>
+            <span class="event-description">Depart from <strong>{{ item.location }}</strong></span>
+          </div>
+          <div v-else-if="item.type === 'arrival'" class="schedule-event arrival-event">
+            <span class="event-time">{{ formatTime(item.time) }}</span>
+            <span class="event-description">
+              Arrive at <strong>{{ item.location }}</strong>
+              (Travel: {{ formatDuration(item.travel_duration_seconds) }} min)
+            </span>
+          </div>
+          <div v-else-if="item.type === 'stay'" class="schedule-event stay-event">
+            <!-- No time for stay, it's a duration at the arrival location -->
+            <span class="event-description event-stay-description">
+              Stay at <strong>{{ item.location }}</strong> for {{ formatDuration(item.duration_seconds) }} min
+            </span>
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <hr class="separator"/>
+
     <div>
       <input type="text" v-model="storeAddress" placeholder="Store Location (for manual directions)" />
     </div>
@@ -196,7 +235,11 @@ export default {
       optimizedRouteData: null, // Stores response from /api/route/optimize
       isCalculatingRoute: false, // Loading indicator for route calculation
       selectedTravelMode: 'driving', // 'driving' or 'public_transit'
-      homeCityName: '', // Placeholder for city name/code for transit. TODO: Populate this.
+      homeCityName: '', // Placeholder for city name/code for transit.
+
+      // Schedule Display
+      defaultStartTime: '09:00:00', // e.g., 9 AM
+      displayableSchedule: null, // Array of schedule items
     };
   },
   computed: {
@@ -362,7 +405,8 @@ export default {
           latitude: selectedCandidate.latitude,
           longitude: selectedCandidate.longitude,
           status: 'confirmed',
-          amap_id: selectedCandidate.id // Store Amap POI ID if needed
+          amap_id: selectedCandidate.id, // Store Amap POI ID if needed
+          stayDurationMinutes: 0 // Initialize stay duration
         };
         this.shopsToVisit.splice(shopIndex, 1, updatedShop); // Replace item reactively
 
@@ -382,6 +426,7 @@ export default {
 
       this.isCalculatingRoute = true;
       this.optimizedRouteData = null; // Clear previous route data
+      this.displayableSchedule = null; // Clear previous schedule
       if (this.$refs.mapDisplay) { // Clear previous route from map
          this.$refs.mapDisplay.clearMapElements();
       }
@@ -389,13 +434,20 @@ export default {
 
       const confirmedShops = this.shopsToVisit
         .filter(shop => shop.status === 'confirmed')
-        .map(shop => ({
-          id: shop.id, // Keep original client-side ID for reference if needed
-          name: shop.name,
-          latitude: shop.latitude,
-          longitude: shop.longitude,
-          amap_id: shop.amap_id // Include Amap ID if available and useful for backend
-        }));
+        .map(shop => {
+          const shopPayload = {
+            id: shop.id, // Keep original client-side ID for reference if needed
+            name: shop.name,
+            latitude: shop.latitude,
+            longitude: shop.longitude,
+            amap_id: shop.amap_id // Include Amap ID if available and useful for backend
+          };
+          // Add stay_duration in seconds if stayDurationMinutes is positive
+          if (shop.stayDurationMinutes && shop.stayDurationMinutes > 0) {
+            shopPayload.stay_duration = shop.stayDurationMinutes * 60;
+          }
+          return shopPayload;
+        });
 
       if (confirmedShops.length === 0) {
           alert("No shops have been confirmed with a location yet. Please search and select shops first.");
@@ -426,14 +478,17 @@ export default {
       try {
         const response = await axios.post('/api/route/optimize', payload);
         this.optimizedRouteData = response.data;
-        if (this.$refs.mapDisplay && this.optimizedRouteData) {
-          this.showMap = true; // Ensure map is visible
-          this.$refs.mapDisplay.drawOptimizedRoute(this.optimizedRouteData);
-        } else if (!this.$refs.mapDisplay) {
+        if (this.optimizedRouteData) {
+          this.displayableSchedule = this.generateDisplaySchedule(this.optimizedRouteData);
+          if (this.$refs.mapDisplay) {
+            this.showMap = true; // Ensure map is visible
+            this.$refs.mapDisplay.drawOptimizedRoute(this.optimizedRouteData);
+          } else {
             console.warn("MapDisplay component not available via ref to draw route.");
-        }
-        if (!this.optimizedRouteData) {
+          }
+        } else {
             alert("Route calculation did not return any data, though the request was successful.");
+            this.displayableSchedule = null; // Ensure schedule is cleared if route data is unexpectedly null
         }
 
       } catch (error) {
@@ -444,9 +499,90 @@ export default {
         }
         alert(errorMessage);
         this.optimizedRouteData = null; // Clear data on error
+        this.displayableSchedule = null; // Clear schedule on error
       } finally {
         this.isCalculatingRoute = false;
       }
+    },
+    generateDisplaySchedule(routeData) {
+      if (!routeData || !routeData.optimized_order || !routeData.route_segments) {
+        return [];
+      }
+
+      const displayScheduleItems = [];
+      let scheduleTime = new Date();
+      const [hours, minutes, seconds] = this.defaultStartTime.split(':').map(Number);
+      scheduleTime.setHours(hours, minutes, seconds, 0);
+
+      // First item is Home departure
+      if (routeData.optimized_order.length > 0 && routeData.optimized_order[0].name === "Home") {
+        displayScheduleItems.push({
+          type: 'departure',
+          location: 'Home',
+          time: new Date(scheduleTime.getTime())
+        });
+      }
+
+      for (let i = 0; i < routeData.route_segments.length; i++) {
+        const segment = routeData.route_segments[i];
+        const travelDurationSeconds = segment.duration;
+        // const fromLocationName = segment.from_name; // Not directly used in item creation for this loop
+        const toLocationName = segment.to_name;
+        const toLocationId = segment.to_id; // This is the original client-side ID
+
+        // Add travel time to current scheduleTime
+        scheduleTime.setSeconds(scheduleTime.getSeconds() + travelDurationSeconds);
+
+        displayScheduleItems.push({
+          type: 'arrival',
+          location: toLocationName,
+          time: new Date(scheduleTime.getTime()),
+          travel_duration_seconds: travelDurationSeconds
+        });
+
+        // Handle stay duration if it's a shop (not Home)
+        // The last segment brings us back home, so toLocationName could be "Home"
+        if (toLocationName !== "Home") {
+          // The toLocation for segment `i` is `routeData.optimized_order[i+1]`
+          const currentRoutePoint = routeData.optimized_order[i+1];
+          const stayDurationSeconds = currentRoutePoint.stay_duration || 0; // Already in seconds from backend
+
+          if (stayDurationSeconds > 0) {
+            displayScheduleItems.push({
+              type: 'stay',
+              location: toLocationName, // or currentRoutePoint.name
+              duration_seconds: stayDurationSeconds
+            });
+
+            // Add stay time to current scheduleTime
+            scheduleTime.setSeconds(scheduleTime.getSeconds() + stayDurationSeconds);
+
+            // Add departure from this shop
+            displayScheduleItems.push({
+              type: 'departure',
+              location: toLocationName, // or currentRoutePoint.name
+              time: new Date(scheduleTime.getTime())
+            });
+          } else { // No stay duration or stay_duration is 0
+            // If no stay, departure is immediate (same time as arrival).
+            displayScheduleItems.push({
+              type: 'departure',
+              location: toLocationName, // or currentRoutePoint.name
+              time: new Date(scheduleTime.getTime()) // Same as arrival time
+            });
+          }
+        }
+      }
+      return displayScheduleItems;
+    },
+    formatTime(dateObject) {
+      if (!dateObject || !(dateObject instanceof Date)) return '';
+      return dateObject.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    },
+    formatDuration(totalSeconds) {
+      if (totalSeconds === undefined || totalSeconds === null || totalSeconds < 0) return 'N/A';
+      const minutes = Math.round(totalSeconds / 60);
+      return `${minutes}`; // Template will add " min"
     }
   },
   mounted() {
@@ -610,7 +746,7 @@ export default {
 .shop-item {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start; /* Align items to the top to handle multi-line text better */
+  align-items: flex-start; /* Align items to the top */
   padding: 10px;
   border: 1px solid #eee;
   border-radius: 4px;
@@ -621,7 +757,7 @@ export default {
 .shop-info {
   flex-grow: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: column; /* Stack shop name, address, and stay duration input vertically */
 }
 .shop-name {
   font-weight: bold;
@@ -630,10 +766,30 @@ export default {
 .shop-address-confirmed {
   font-size: 0.9em;
   color: #555;
+  margin-bottom: 5px; /* Space before stay duration input */
 }
+.shop-stay-duration {
+  display: flex;
+  align-items: center;
+  margin-top: 5px; /* Space above the stay duration input */
+}
+.stay-duration-label {
+  font-size: 0.85em;
+  margin-right: 5px;
+  color: #333;
+}
+.stay-duration-input {
+  width: 70px; /* Adjust width as needed */
+  padding: 4px 6px;
+  font-size: 0.9em;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+
 
 .shop-item-actions button {
   margin-left: 8px;
+  align-self: flex-start; /* Align buttons to the top of their container if shop-info grows tall */
 }
 
 .btn-small {
@@ -799,6 +955,54 @@ input[type="text"] { /* More general styling for text inputs */
   border-radius: 4px;
   box-sizing: border-box;
   margin-bottom: 10px; /* Add some space below inputs */
+}
+
+/* Styles for Schedule Display */
+.schedule-display-section {
+  background-color: #f0f8ff; /* AliceBlue, a very light blue */
+  padding: 20px;
+  border-radius: 6px;
+  margin-bottom: 25px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+.schedule-display-section h3 {
+  margin-top: 0;
+  color: #333;
+  text-align: center;
+  margin-bottom: 15px;
+}
+.schedule-list {
+  list-style-type: none;
+  padding: 0;
+}
+.schedule-item {
+  padding: 8px 0;
+  border-bottom: 1px dashed #cce0ff; /* Light blue dashed border */
+}
+.schedule-item:last-child {
+  border-bottom: none;
+}
+.schedule-event {
+  display: flex;
+  align-items: center;
+}
+.event-time {
+  font-weight: bold;
+  color: #0056b3; /* Dark blue for time */
+  margin-right: 15px;
+  min-width: 70px; /* Ensure alignment */
+}
+.event-description {
+  color: #333;
+}
+.event-stay-description {
+  padding-left: calc(70px + 15px); /* Align with descriptions of timed events */
+  font-style: italic;
+  color: #555;
+}
+.departure-event .event-description strong,
+.arrival-event .event-description strong {
+  color: #007bff; /* Primary blue for location names */
 }
 
 </style>
