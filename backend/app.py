@@ -454,6 +454,12 @@ def optimize_route():
     for shop in shops_data:
         if 'latitude' not in shop or 'longitude' not in shop or 'id' not in shop or 'name' not in shop:
             return jsonify({'message': 'Each shop in "shops" must have "id", "name", "latitude", and "longitude".'}), 400
+        # Validate stay_duration if provided
+        if 'stay_duration' in shop:
+            if not isinstance(shop['stay_duration'], (int, float)) or shop['stay_duration'] < 0:
+                return jsonify({'message': f'Optional "stay_duration" for shop {shop.get("id", "")} must be a non-negative number.'}), 400
+        else:
+            shop['stay_duration'] = 0 # Default to 0 if not provided
 
     api_key = app.config.get('AMAP_API_KEY')
     if not api_key:
@@ -468,8 +474,10 @@ def optimize_route():
         "id": "home",
         "name": "Home",
         "latitude": home_location_data['latitude'],
-        "longitude": home_location_data['longitude']
+        "longitude": home_location_data['longitude'],
+        "stay_duration": 0 # Home has no stay duration in this context
     }
+    # Ensure shops_data now contains validated/defaulted stay_duration
     all_points_objects = [home_point] + shops_data # Store full objects for reference
 
     # Create a list of (lat, lon) for distance matrix calculation
@@ -539,8 +547,10 @@ def optimize_route():
     # Construct final response with full segment details for the best path
     optimized_order_objects = [all_points_objects[i] for i in best_path_indices]
     route_segments_details = []
-    total_route_duration = 0
+    total_travel_duration = 0
+    total_stay_duration = 0
 
+    # Calculate total travel duration from segments
     for i in range(len(best_path_indices) - 1):
         u, v = best_path_indices[i], best_path_indices[i+1]
         segment_info = cost_matrix[u][v] # Already fetched, includes polyline
@@ -550,16 +560,25 @@ def optimize_route():
             "from_id": all_points_objects[u]["id"],
             "to_id": all_points_objects[v]["id"],
             "distance": segment_info['distance'],
-            "duration": segment_info['duration'],
+            "duration": segment_info['duration'], # This is travel time for the segment
             "polyline": segment_info['polyline']
         })
-        total_route_duration += segment_info['duration']
+        total_travel_duration += segment_info['duration']
+
+    # Calculate total stay duration for shops in the chosen path
+    # The first and last points in best_path_indices are 'home', which has stay_duration 0.
+    # Shops are all_points_objects[idx] where idx is in best_path_indices[1:-1]
+    for shop_idx_in_all_points in best_path_indices[1:-1]: # Exclude home at start and end
+        # all_points_objects already has stay_duration (either provided or defaulted to 0)
+        total_stay_duration += all_points_objects[shop_idx_in_all_points].get('stay_duration', 0)
+
+    overall_total_duration = total_travel_duration + total_stay_duration
 
     return jsonify({
         'optimized_order': optimized_order_objects,
-        'total_distance': min_total_distance,
-        'total_duration': total_route_duration,
-        'route_segments': route_segments_details
+        'total_distance': min_total_distance, # This is purely travel distance
+        'total_duration': overall_total_duration, # Travel time + Stay time
+        'route_segments': route_segments_details # Segments only show travel time
     }), 200
 
 
