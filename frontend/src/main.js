@@ -124,6 +124,7 @@ const MapDisplayComp = {
     return {
       map: null,
       currentMarker: null,
+      driving: null, // For route display
     };
   },
   mounted() {
@@ -148,6 +149,7 @@ const MapDisplayComp = {
   },
   methods: {
     initMap() {
+      // Ensure container ID matches the template
       this.map = new AMap.Map('map-container-js', {
         zoom: 11,
         center: [116.397428, 39.90923], // Default to Beijing
@@ -155,13 +157,116 @@ const MapDisplayComp = {
       });
       this.map.addControl(new AMap.ToolBar());
       this.map.addControl(new AMap.Scale());
+      console.log("MapDisplayComp: Map initialized with container 'map-container-js'");
+    },
+    clearPreviousRoute() {
+      if (this.driving) {
+        this.driving.clear();
+        console.log("MapDisplayComp: Previous route cleared.");
+      }
+      if (this.currentMarker) {
+        this.map.remove(this.currentMarker);
+        this.currentMarker = null;
+        console.log("MapDisplayComp: Previous marker cleared.");
+      }
+    },
+    displayRoute(originAddress, destinationAddress) {
+      if (!this.map) {
+        alert("MapDisplayComp: Map is not initialized yet. Please wait.");
+        console.error("MapDisplayComp: Map not initialized when displayRoute called.");
+        // Attempt to initialize map if it's not, could be due to timing
+        if(window.AMap) {
+          this.initMap();
+          if (!this.map) {
+            console.error("MapDisplayComp: Failed to initialize map on demand.");
+            return;
+          }
+          alert("MapDisplayComp: Map was initialized now. Please try getting directions again.");
+          return;
+        }
+        return;
+      }
+
+      console.log(`MapDisplayComp: displayRoute called with Origin: ${originAddress}, Destination: ${destinationAddress}`);
+      this.clearPreviousRoute();
+
+      // AMap.Geocoder and AMap.Driving should be available globally from index.html
+      if (!AMap.Geocoder || !AMap.Driving) {
+        alert("MapDisplayComp: Geocoder or Driving service not available. Check AMap loading in index.html.");
+        console.error("MapDisplayComp: AMap.Geocoder or AMap.Driving not found.");
+        return;
+      }
+
+      const geocoder = new AMap.Geocoder();
+      let originLngLat, destinationLngLat;
+      let geocodeCount = 0;
+      const totalGeocodes = 2;
+
+      const checkAndProceed = () => {
+        geocodeCount++;
+        if (geocodeCount === totalGeocodes) {
+          if (originLngLat && destinationLngLat) {
+            console.log("MapDisplayComp: Both addresses geocoded. Origin:", originLngLat, "Destination:", destinationLngLat);
+            if (!this.driving) {
+              this.driving = new AMap.Driving({
+                map: this.map,
+                policy: AMap.DrivingPolicy.LEAST_TIME // Example policy
+                // panel: "panel_id_in_mapdisplaycomp_if_any" // Optional
+              });
+              console.log("MapDisplayComp: AMap.Driving initialized.");
+            }
+
+            this.driving.search(originLngLat, destinationLngLat, (status, result) => {
+              if (status === 'complete' && result.info === 'OK') {
+                console.log("MapDisplayComp: Route search successful.", result);
+                // Route is drawn by the plugin.
+              } else {
+                alert(`MapDisplayComp: Failed to get directions. Status: ${status}, Info: ${result.info}`);
+                console.error("MapDisplayComp: Route search failed:", status, result);
+              }
+            });
+          } else {
+            alert("MapDisplayComp: Could not determine coordinates for both locations. Please check addresses.");
+            console.error("MapDisplayComp: One or both geocoding attempts failed to return LngLat.");
+          }
+        }
+      };
+
+      geocoder.getLocation(originAddress, (status, result) => {
+        if (status === 'complete' && result.info === 'OK' && result.geocodes.length) {
+          originLngLat = result.geocodes[0].location;
+          console.log("MapDisplayComp: Geocoded origin:", originAddress, "to", originLngLat);
+        } else {
+          alert(`MapDisplayComp: Geocoding failed for origin: ${originAddress}. ${result.info}`);
+          console.error("MapDisplayComp: Geocoding failed for origin:", originAddress, status, result);
+        }
+        checkAndProceed();
+      });
+
+      geocoder.getLocation(destinationAddress, (status, result) => {
+        if (status === 'complete' && result.info === 'OK' && result.geocodes.length) {
+          destinationLngLat = result.geocodes[0].location;
+          console.log("MapDisplayComp: Geocoded destination:", destinationAddress, "to", destinationLngLat);
+        } else {
+          alert(`MapDisplayComp: Geocoding failed for destination: ${destinationAddress}. ${result.info}`);
+          console.error("MapDisplayComp: Geocoding failed for destination:", destinationAddress, status, result);
+        }
+        checkAndProceed();
+      });
     },
     setCenterAndMarker(longitude, latitude, address) {
       if (!this.map) {
-        console.error("Map not initialized in MapDisplayComp.");
-        // Attempt to initialize map if it's not, could be due to timing
-        if(window.AMap) this.initMap();
-        if (!this.map) return; // If still not initialized, exit
+        console.error("MapDisplayComp: Map not initialized when setCenterAndMarker called.");
+         // Attempt to initialize map if it's not, could be due to timing
+        if(window.AMap) {
+          this.initMap();
+          if (!this.map) {
+            console.error("MapDisplayComp: Failed to initialize map on demand for setCenterAndMarker.");
+            return;
+          }
+        } else {
+          return;
+        }
       }
       if (this.currentMarker) {
         this.map.remove(this.currentMarker);
@@ -177,9 +282,15 @@ const MapDisplayComp = {
     }
   },
   beforeUnmount() {
+    if (this.driving) {
+      this.driving.clear();
+      this.driving = null;
+      console.log("MapDisplayComp: Driving instance cleared and destroyed.");
+    }
     if (this.map) {
       this.map.destroy();
       this.map = null;
+      console.log("MapDisplayComp: Map instance destroyed.");
     }
   }
 };
@@ -191,11 +302,30 @@ const Dashboard = {
   template: `
     <div>
       <h2>Welcome to your Dashboard, {{ username }}!</h2>
-      <div class="map-controls">
-        <input type="text" v-model="searchQuery" placeholder="Enter a location to search">
-        <button @click="searchLocation">Search</button>
+
+      <div class="directions-controls" style="margin-bottom: 15px;">
+        <h3>Get Directions</h3>
+        <div>
+          <label for="homeAddress">Home Location:</label>
+          <input type="text" id="homeAddress" v-model="homeAddress" placeholder="Enter home address">
+        </div>
+        <div>
+          <label for="storeAddress">Store Location:</label>
+          <input type="text" id="storeAddress" v-model="storeAddress" placeholder="Enter store address">
+        </div>
+        <button @click="getDirections" style="margin-top: 10px;">Get Directions</button>
       </div>
+
+      <hr style="margin: 20px 0;">
+
+      <div class="map-controls">
+        <h3>Search Location</h3>
+        <input type="text" v-model="searchQuery" placeholder="Enter a location to search">
+        <button @click="searchLocation">Search and Center</button>
+      </div>
+
       <map-display ref="mapDisplayRef" style="margin-top: 20px;"></map-display>
+
       <p style="margin-top: 20px;">This is where your trip planning features will be.</p>
       <button @click="logoutUser" class="logout-button">Logout</button>
     </div>
@@ -204,6 +334,8 @@ const Dashboard = {
     return {
       username: 'User', // Placeholder
       searchQuery: '',
+      homeAddress: '',
+      storeAddress: '',
     };
   },
   methods: {
@@ -215,28 +347,41 @@ const Dashboard = {
     fetchUsername() {
       // Placeholder
     },
+    getDirections() {
+      if (!this.homeAddress.trim() || !this.storeAddress.trim()) {
+        alert("Please enter both Home and Store locations.");
+        return;
+      }
+      const mapDisplay = this.$refs.mapDisplayRef;
+      if (mapDisplay && typeof mapDisplay.displayRoute === 'function') {
+        console.log("Dashboard: Calling displayRoute on MapDisplayComp with:", this.homeAddress, this.storeAddress);
+        mapDisplay.displayRoute(this.homeAddress, this.storeAddress);
+      } else {
+        alert("Map display component is not available or does not support routing.");
+        console.error("Dashboard: mapDisplayRef not found or displayRoute method missing.", mapDisplay);
+      }
+    },
     searchLocation() {
       if (!this.searchQuery.trim()) {
         alert("Please enter a location to search.");
         return;
       }
-      if (!window.AMap || !AMap.Geocoder) {
-          alert("Map services or Geocoder not available. Please check API key and script loading.");
+      // Geocoder and map readiness checks are now more robust within MapDisplayComp
+      // and its setCenterAndMarker method.
+      const mapDisplayComponent = this.$refs.mapDisplayRef;
+      if (!mapDisplayComponent) {
+          alert("Map component is not ready yet. Please wait a moment and try again.");
+          console.error("Dashboard: mapDisplayRef not found for searchLocation.");
           return;
       }
 
-      const mapDisplayComponent = this.$refs.mapDisplayRef;
-      if (!mapDisplayComponent || !mapDisplayComponent.map) {
-          // Try to ensure map is initialized if accessed too quickly
-          if (mapDisplayComponent && typeof mapDisplayComponent.initMap === 'function' && !mapDisplayComponent.map) {
-              mapDisplayComponent.initMap(); // Attempt to initialize if not already
-          }
-          if (!mapDisplayComponent || !mapDisplayComponent.map) {
-            alert("Map component is not ready yet. Please wait a moment and try again.");
-            return;
-          }
+      // We'll use a global Geocoder here for simplicity, as it's just for finding a point
+      // The MapDisplayComp will handle its own geocoding for routes
+      if (!window.AMap || !AMap.Geocoder) {
+          alert("Map services or Geocoder not available for search. Please check API key and script loading.");
+          console.error("Dashboard: AMap.Geocoder not available for searchLocation.");
+          return;
       }
-
       const geocoder = new AMap.Geocoder();
       geocoder.getLocation(this.searchQuery, (status, result) => {
         if (status === 'complete' && result.info === 'OK' && result.geocodes && result.geocodes.length > 0) {

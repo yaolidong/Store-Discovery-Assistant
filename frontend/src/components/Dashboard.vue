@@ -3,14 +3,42 @@
     <h2>Welcome to your Dashboard!</h2>
     <p>This is where your amazing trip planning features will reside.</p>
     <p>Plan new trips, view existing ones, and manage your travel itineraries.</p>
+
+    <div>
+      <input type="text" v-model="homeAddress" placeholder="Home Location" />
+    </div>
+    <div>
+      <input type="text" v-model="storeAddress" placeholder="Store Location" />
+    </div>
+    <button @click="getDirections" class="directions-button">Get Directions</button>
+    <map-display v-if="showMap"></map-display>
     <button @click="logoutUser" class="logout-button">Logout</button>
   </div>
 </template>
 
 <script>
+import MapDisplay from './MapDisplay.vue';
+
 export default {
   name: 'Dashboard',
+  components: {
+    MapDisplay,
+  },
+  data() {
+    return {
+      homeAddress: '',
+      storeAddress: '',
+      showMap: false, // Controls the visibility of the map
+    };
+  },
   methods: {
+    getDirections() {
+      console.log('Home Address:', this.homeAddress);
+      console.log('Store Address:', this.storeAddress);
+      this.showMap = true; // Show the map after getting directions
+      // Here you would typically call an API to get directions
+      // and pass them to the MapDisplay component
+    },
     logoutUser() {
       // Clear user session/token (e.g., from localStorage)
       localStorage.removeItem('userToken');
