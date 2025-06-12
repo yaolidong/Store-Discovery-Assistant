@@ -158,17 +158,27 @@
       </div>
       <div v-if="!isLoadingShops && searchResults.length > 0 && selectedShopForSearch.id" class="search-results-section">
         <h4>Select the correct shop for: "{{ selectedShopForSearch.name }}"</h4>
+        <div class="search-results-actions">
+          <button
+            v-if="searchResults.some(r => r.distance !== undefined)"
+            @click="sortResultsByDistance"
+            class="btn-secondary btn-small sort-distance-btn"
+            :disabled="searchResultsSortedByDistance"
+          >
+            {{ searchResultsSortedByDistance ? 'Sorted by Distance' : 'Sort by Distance' }}
+          </button>
+        </div>
         <ul class="search-results-list">
           <li v-for="candidate in searchResults" :key="candidate.id" class="search-result-item">
             <div>
               <strong>{{ candidate.name }}</strong><br>
               <small>{{ candidate.address }}</small>
-              <small v-if="candidate.distance"> (Distance: {{ candidate.distance }}m)</small>
+              <small v-if="candidate.distance"> (Distance: {{ Math.round(candidate.distance) }}m)</small>
             </div>
             <button @click="confirmShopSelection(candidate)" class="btn-success btn-small">Select</button>
           </li>
         </ul>
-        <button @click="searchResults = []; selectedShopForSearch = {id: null, name: ''};" class="btn-secondary btn-small">Cancel Search</button>
+        <button @click="clearSearchResults" class="btn-secondary btn-small">Cancel Search</button>
       </div>
     </div>
 
@@ -218,6 +228,23 @@
               &nbsp;&nbsp;&nbsp;&nbsp;⇩ To {{ optimizedRouteData.route_segments[index].to_name }}:
               {{ (optimizedRouteData.route_segments[index].distance / 1000).toFixed(2) }} km,
               {{ Math.round(optimizedRouteData.route_segments[index].duration / 60) }} min
+
+              <!-- Detailed Transit Steps -->
+              <div v-if="selectedTravelMode === 'public_transit' && optimizedRouteData.route_segments[index].transit_details" class="detailed-transit-steps">
+                <strong>Steps:</strong>
+                <div v-for="(step, stepIndex) in optimizedRouteData.route_segments[index].transit_details" :key="stepIndex" class="transit-step-detail">
+                  <p>
+                    <strong>{{ capitalizeFirstLetter(step.type) }}:</strong>
+                    <span v-if="step.instruction"> {{ step.instruction }}</span>
+                    <span v-else-if="step.line_name"> Take {{ step.line_name }}</span>
+                    <span v-if="step.departure_stop"> from {{ step.departure_stop }}</span>
+                    <span v-if="step.arrival_stop"> to {{ step.arrival_stop }}</span>.
+                  </p>
+                  <p class="step-meta">
+                    Duration: {{ formatDurationForStep(step.duration) }}, Distance: {{ formatDistance(step.distance) }}
+                  </p>
+                </div>
+              </div>
             </div>
           </li>
         </ul>
@@ -301,6 +328,7 @@ export default {
       searchResults: [], // Stores results from /api/shops/find
       selectedShopForSearch: { id: null, name: '' }, // Shop from shopsToVisit being searched
       isLoadingShops: false, // Loading indicator for shop search
+      searchResultsSortedByDistance: false, // To track if results are sorted
 
       // Optimized Route
       optimizedRouteData: null, // Stores response from /api/route/optimize
@@ -435,14 +463,29 @@ export default {
       this.shopsToVisit = this.shopsToVisit.filter(shop => shop.id !== shopId);
       // If the shop being removed was the one selected for search, clear search results
       if (this.selectedShopForSearch && this.selectedShopForSearch.id === shopId) {
-        this.searchResults = [];
-        this.selectedShopForSearch = { id: null, name: '' };
+        this.clearSearchResults();
+      }
+    },
+    clearSearchResults() {
+      this.searchResults = [];
+      this.selectedShopForSearch = { id: null, name: '' };
+      this.searchResultsSortedByDistance = false; // Reset sort status
+    },
+    sortResultsByDistance() {
+      if (this.searchResults && this.searchResults.length > 0) {
+        this.searchResults.sort((a, b) => {
+          const distA = parseFloat(a.distance) || Infinity;
+          const distB = parseFloat(b.distance) || Infinity;
+          return distA - distB;
+        });
+        this.searchResultsSortedByDistance = true;
       }
     },
     async findShopOnMap(shop) {
       this.isLoadingShops = true;
       this.selectedShopForSearch = shop;
       this.searchResults = []; // Clear previous results
+      this.searchResultsSortedByDistance = false; // Reset sort status on new search
 
       const payload = {
         keywords: shop.name,
@@ -462,7 +505,7 @@ export default {
           this.searchResults = response.data.shops;
         } else {
           alert(`No shops found for "${shop.name}". You can try a different name or add details manually.`);
-          this.searchResults = []; // Ensure it's empty
+          // this.searchResults = []; // Ensure it's empty // Already cleared at the start
         }
       } catch (error) {
         console.error('Error searching for shops:', error);
@@ -471,7 +514,7 @@ export default {
           errorMessage += ` ${error.response.data.message}`;
         }
         alert(errorMessage);
-        this.searchResults = []; // Ensure it's empty on error
+        // this.searchResults = []; // Ensure it's empty on error // Already cleared
       } finally {
         this.isLoadingShops = false;
       }
@@ -479,9 +522,6 @@ export default {
     confirmShopSelection(selectedCandidate) {
       const shopIndex = this.shopsToVisit.findIndex(s => s.id === this.selectedShopForSearch.id);
       if (shopIndex !== -1) {
-        // Create a new object for reactivity if shopsToVisit items are complex
-        // or directly update if simple and Vue detects changes.
-        // For safety and reactivity, creating a new object or using Vue.set for new properties is good.
         const updatedShop = {
           ...this.shopsToVisit[shopIndex], // Keep original id and any other properties
           name: selectedCandidate.name,    // Amap might return a more formal name
@@ -498,9 +538,7 @@ export default {
       } else {
         alert("Error: Could not find the original shop in your list to update.");
       }
-      // Clear search state
-      this.searchResults = [];
-      this.selectedShopForSearch = { id: null, name: '' };
+      this.clearSearchResults(); // Clear search state after selection
     },
     async calculateOptimizedRoute() {
       if (!this.canCalculateRoute) {
@@ -668,6 +706,25 @@ export default {
       const minutes = Math.round(totalSeconds / 60);
       return `${minutes}`; // Template will add " min"
     },
+    formatDurationForStep(totalSeconds) {
+      if (totalSeconds === undefined || totalSeconds === null || totalSeconds < 0) return 'N/A';
+      if (totalSeconds < 60) return `${totalSeconds} sec`;
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      if (seconds === 0) return `${minutes} min`;
+      return `${minutes} min ${seconds} sec`;
+    },
+    formatDistance(meters) {
+      if (meters === undefined || meters === null || meters < 0) return 'N/A';
+      if (meters < 1000) {
+        return `${meters} m`;
+      }
+      return `${(meters / 1000).toFixed(2)} km`;
+    },
+    capitalizeFirstLetter(string) {
+      if (!string) return '';
+      return string.charAt(0).toUpperCase() + string.slice(1);
+    },
     async onAddressInput() {
       if (this.homeAddressInput.trim().length < 2) {
         this.addressSuggestions = [];
@@ -729,7 +786,7 @@ export default {
         
         const response = await axios.post('/api/shops/find', payload);
         if (response.data.shops && response.data.shops.length > 0) {
-          this.shopSuggestions = response.data.shops.slice(0, 8); // 限制显示8个建议
+          this.shopSuggestions = response.data.shops.slice(0, 10); // Display up to 10 suggestions
         } else {
           this.shopSuggestions = [];
         }
@@ -849,6 +906,32 @@ export default {
   font-size: 0.9em;
   color: #333;
   padding-left: 10px; /* Indent segment details */
+  margin-top: 5px;
+}
+
+.detailed-transit-steps {
+  margin-top: 10px;
+  padding-left: 15px;
+  border-left: 2px solid #007bff; /* Blue left border for transit steps block */
+}
+.detailed-transit-steps strong:first-child { /* "Steps:" heading */
+  font-size: 0.95em;
+  color: #0056b3;
+}
+.transit-step-detail {
+  margin-top: 8px;
+  padding: 8px;
+  background-color: #f8f9fa; /* Lighter background for each step */
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+.transit-step-detail p {
+  margin: 0 0 4px 0; /* Tighter spacing for paragraphs within a step */
+  line-height: 1.4;
+}
+.transit-step-detail .step-meta {
+  font-size: 0.9em;
+  color: #555;
 }
 
 
@@ -871,8 +954,18 @@ export default {
 }
 .search-results-section h4 {
   margin-top: 0;
-  margin-bottom: 15px;
+  margin-bottom: 10px; /* Adjusted margin */
 }
+.search-results-actions {
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: flex-start; /* Align sort button to the left */
+}
+.sort-distance-btn {
+  padding: 6px 12px; /* Slightly smaller padding */
+  font-size: 0.9em;
+}
+
 .search-results-list {
   list-style: none;
   padding: 0;
