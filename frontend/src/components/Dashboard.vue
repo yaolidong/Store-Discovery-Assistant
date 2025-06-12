@@ -204,20 +204,68 @@
         Please set your home location, confirm at least one shop, and specify city if using transit, to enable route calculation.
       </p>
 
-      <div v-if="optimizedRouteData" class="optimized-route-details">
-        <h4>Optimized Itinerary:</h4>
+      <!-- Route Choices Section -->
+      <div class="route-choices-section" v-if="routeOptions && !selectedRouteKey && !isCalculatingRoute">
+        <h4>Choose Your Preferred Route:</h4>
+
+        <div v-if="routeOptions.shortest_distance" class="route-choice-card">
+          <h5>Option 1: Shortest Distance</h5>
+          <p>
+            Total Distance: {{ (routeOptions.shortest_distance.total_distance / 1000).toFixed(2) }} km<br>
+            Total Travel Time: {{ Math.round(routeOptions.shortest_distance.total_travel_time / 60) }} minutes<br>
+            Total Overall Duration: {{ Math.round(routeOptions.shortest_distance.total_overall_duration / 60) }} minutes
+          </p>
+          <button @click="selectRoute('shortest_distance')" class="btn-primary btn-select-route">Select Shortest Distance</button>
+        </div>
+
+        <div v-if="routeOptions.fastest_travel_time" class="route-choice-card">
+          <h5>Option 2: Fastest Travel Time</h5>
+          <p>
+            Total Distance: {{ (routeOptions.fastest_travel_time.total_distance / 1000).toFixed(2) }} km<br>
+            Total Travel Time: {{ Math.round(routeOptions.fastest_travel_time.total_travel_time / 60) }} minutes<br>
+            Total Overall Duration: {{ Math.round(routeOptions.fastest_travel_time.total_overall_duration / 60) }} minutes
+          </p>
+          <button @click="selectRoute('fastest_travel_time')" class="btn-primary btn-select-route">Select Fastest Travel Time</button>
+        </div>
+
+        <div v-if="routeOptions && !routeOptions.shortest_distance && !routeOptions.fastest_travel_time">
+          <p>No routes could be calculated with the current inputs and settings.</p>
+        </div>
+      </div>
+
+
+      <!-- Optimized Route Details Display (now uses selectedRouteDetail) -->
+      <div v-if="selectedRouteDetail" class="optimized-route-details">
+        <h4>Optimized Itinerary ({{ selectedRouteKey.replace('_', ' ') }}):</h4>
         <p>
-          <strong>Total Distance:</strong> {{ (optimizedRouteData.total_distance / 1000).toFixed(2) }} km<br>
-          <strong>Total Duration:</strong> {{ Math.round(optimizedRouteData.total_duration / 60) }} minutes
+          <strong>Total Distance:</strong> {{ (selectedRouteDetail.total_distance / 1000).toFixed(2) }} km<br>
+          <strong>Total Travel Time:</strong> {{ Math.round(selectedRouteDetail.total_travel_time / 60) }} minutes<br>
+          <strong>Total Stay Time at Shops:</strong> {{ Math.round(selectedRouteDetail.total_stay_time / 60) }} minutes<br>
+          <strong>Total Overall Duration:</strong> {{ Math.round(selectedRouteDetail.total_overall_duration / 60) }} minutes
         </p>
         <h5>Route:</h5>
         <ul class="route-steps-list">
-          <li v-for="(point, index) in optimizedRouteData.optimized_order" :key="point.id + '-' + index" class="route-step">
+          <li v-for="(point, index) in selectedRouteDetail.optimized_order" :key="point.id + '-' + index" class="route-step">
             <strong>{{ index + 1 }}. {{ point.name }}</strong>
-            <div v-if="index < optimizedRouteData.route_segments.length" class="segment-details">
-              &nbsp;&nbsp;&nbsp;&nbsp;⇩ To {{ optimizedRouteData.route_segments[index].to_name }}:
-              {{ (optimizedRouteData.route_segments[index].distance / 1000).toFixed(2) }} km,
-              {{ Math.round(optimizedRouteData.route_segments[index].duration / 60) }} min
+            <div v-if="index < selectedRouteDetail.route_segments.length" class="segment-details">
+              <div class="segment-summary">
+                &nbsp;&nbsp;&nbsp;&nbsp;⇩ To {{ selectedRouteDetail.route_segments[index].to_name }}:
+                {{ (selectedRouteDetail.route_segments[index].distance / 1000).toFixed(2) }} km,
+                {{ Math.round(selectedRouteDetail.route_segments[index].duration / 60) }} min
+              </div>
+              <div v-if="selectedRouteDetail.route_segments[index].steps && selectedRouteDetail.route_segments[index].steps.length > 0" class="segment-detailed-steps">
+                <h6>Detailed Directions (click step to highlight on map):</h6>
+                <ul>
+                  <li v-for="(step, stepIndex) in selectedRouteDetail.route_segments[index].steps"
+                      :key="stepIndex"
+                      @click="highlightMapSegment(index, stepIndex)"
+                      style="cursor: pointer;"
+                      title="Click to highlight this step on the map">
+                    <span v-if="step.type" class="step-type">[{{ step.type }}] </span>
+                    {{ step.instruction }}
+                  </li>
+                </ul>
+              </div>
             </div>
           </li>
         </ul>
@@ -227,7 +275,7 @@
     <hr class="separator"/>
 
     <!-- Generated Schedule Display -->
-    <div v-if="displayableSchedule && displayableSchedule.length > 0" class="schedule-display-section">
+    <div v-if="displayableSchedule && displayableSchedule.length > 0 && selectedRouteDetail" class="schedule-display-section">
       <h3>Generated Schedule (Starts at {{ formatTime(new Date(new Date().setHours(...defaultStartTime.split(':').map(Number)))) }})</h3>
       <ul class="schedule-list">
         <li v-for="(item, index) in displayableSchedule" :key="index" class="schedule-item">
@@ -303,7 +351,8 @@ export default {
       isLoadingShops: false, // Loading indicator for shop search
 
       // Optimized Route
-      optimizedRouteData: null, // Stores response from /api/route/optimize
+      routeOptions: null, // To store { shortest_distance: {...}, fastest_travel_time: {...} }
+      selectedRouteKey: null, // e.g., 'shortest_distance' or 'fastest_travel_time'
       isCalculatingRoute: false, // Loading indicator for route calculation
       selectedTravelMode: 'driving', // 'driving' or 'public_transit'
       homeCityName: '', // Placeholder for city name/code for transit.
@@ -329,6 +378,12 @@ export default {
       const homeSet = this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude;
       const confirmedShopsExist = this.shopsToVisit.some(shop => shop.status === 'confirmed');
       return homeSet && confirmedShopsExist;
+    },
+    selectedRouteDetail() {
+      if (this.routeOptions && this.selectedRouteKey) {
+        return this.routeOptions[this.selectedRouteKey];
+      }
+      return null;
     }
   },
   methods: {
@@ -509,8 +564,11 @@ export default {
       }
 
       this.isCalculatingRoute = true;
-      this.optimizedRouteData = null; // Clear previous route data
-      this.displayableSchedule = null; // Clear previous schedule
+      // Clear previous selections and data
+      this.routeOptions = null;
+      this.selectedRouteKey = null;
+      this.displayableSchedule = null;
+
       if (this.$refs.mapDisplay) { // Clear previous route from map
          this.$refs.mapDisplay.clearMapElements();
       }
@@ -561,19 +619,21 @@ export default {
 
       try {
         const response = await axios.post('/api/route/optimize', payload);
-        this.optimizedRouteData = response.data;
-        if (this.optimizedRouteData) {
-          this.displayableSchedule = this.generateDisplaySchedule(this.optimizedRouteData);
-          if (this.$refs.mapDisplay) {
-            this.showMap = true; // Ensure map is visible
-            this.$refs.mapDisplay.drawOptimizedRoute(this.optimizedRouteData);
-          } else {
-            console.warn("MapDisplay component not available via ref to draw route.");
-          }
-        } else {
-            alert("Route calculation did not return any data, though the request was successful.");
-            this.displayableSchedule = null; // Ensure schedule is cleared if route data is unexpectedly null
+        this.routeOptions = response.data.routes; // Store the entire 'routes' object
+
+        const sdRoute = this.routeOptions ? this.routeOptions.shortest_distance : null;
+        const ftRoute = this.routeOptions ? this.routeOptions.fastest_travel_time : null;
+
+        if (sdRoute && !ftRoute) {
+          this.selectRoute('shortest_distance'); // Auto-select if only shortest distance is available
+        } else if (!sdRoute && ftRoute) {
+          this.selectRoute('fastest_travel_time'); // Auto-select if only fastest time is available
+        } else if (!sdRoute && !ftRoute) {
+          // Both null or routeOptions itself is null which means backend had an issue it reported in message
+           alert(response.data.message || "No routes could be calculated or returned by the server.");
         }
+        // If both routes exist, the user will be presented with choices.
+        // The map and schedule will be drawn/generated when the user makes a selection via selectRoute().
 
       } catch (error) {
         console.error('Error calculating optimized route:', error);
@@ -582,7 +642,8 @@ export default {
           errorMessage += ` ${error.response.data.message}`;
         }
         alert(errorMessage);
-        this.optimizedRouteData = null; // Clear data on error
+        this.routeOptions = null; // Clear data on error
+        this.selectedRouteKey = null;
         this.displayableSchedule = null; // Clear schedule on error
       } finally {
         this.isCalculatingRoute = false;
@@ -766,6 +827,32 @@ export default {
     onCityChange() {
       if (this.selectedCity && this.selectedTravelMode === 'public_transit') {
         this.homeCityName = this.selectedCity;
+      }
+    },
+    selectRoute(routeKey) {
+      this.selectedRouteKey = routeKey;
+      // Now that a route is selected, generate schedule and draw map
+      if (this.selectedRouteDetail) {
+        this.displayableSchedule = this.generateDisplaySchedule(this.selectedRouteDetail);
+        if (this.$refs.mapDisplay) {
+          this.showMap = true; // Ensure map is visible
+          this.$refs.mapDisplay.drawOptimizedRoute(this.selectedRouteDetail);
+        } else {
+          console.warn("MapDisplay component not available via ref to draw route for selected route.");
+        }
+      } else {
+        // This case should ideally not be reached if selectRoute is called with a valid key from existing options
+        console.error("Selected route details are null after selecting key:", routeKey);
+        this.displayableSchedule = null; // Clear schedule if selected route is somehow null
+        alert("There was an issue selecting the route. Please try again.");
+      }
+    },
+    highlightMapSegment(segmentIndex, stepIndex) {
+      if (this.$refs.mapDisplay && this.selectedRouteDetail &&
+          this.selectedRouteDetail.route_segments && this.selectedRouteDetail.route_segments[segmentIndex]) {
+        const segment = this.selectedRouteDetail.route_segments[segmentIndex];
+        // Pass the whole segment object. stepIndex is available if MapDisplay wants to use it later.
+        this.$refs.mapDisplay.highlightSegment(segment, stepIndex);
       }
     },
   },
@@ -1294,6 +1381,78 @@ input[type="text"] { /* More general styling for text inputs */
 .shop-suggestions .suggestion-distance {
   font-size: 0.8em;
   color: #777;
+}
+
+/* Styles for Detailed Segment Steps */
+.segment-summary {
+  margin-bottom: 8px; /* Space between summary and detailed steps */
+}
+.segment-detailed-steps {
+  margin-top: 10px;
+  padding-left: 25px; /* Further indent detailed steps section from segment summary */
+  font-size: 0.9em;
+  background-color: #e0eef9; /* Slightly different background for step details */
+  padding-top: 8px;
+  padding-bottom: 8px;
+  border-radius: 3px;
+}
+.segment-detailed-steps h6 {
+  font-weight: bold;
+  margin-bottom: 5px;
+  color: #004085; /* Darker blue for "Detailed Directions:" heading */
+}
+.segment-detailed-steps ul {
+  list-style-type: disc; /* Or none, or other appropriate style */
+  padding-left: 20px; /* Indent for the list items themselves */
+  margin-bottom: 0; /* Remove default bottom margin from ul */
+}
+.segment-detailed-steps li {
+  margin-bottom: 4px;
+  color: #333;
+}
+.step-type {
+  font-weight: bold;
+  text-transform: capitalize;
+  margin-right: 5px;
+  color: #105a8b; /* A distinct color for step type */
+}
+
+/* Styles for Route Choices */
+.route-choices-section {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #f8f9fa; /* Light grey background */
+  border: 1px solid #dee2e6; /* Light border */
+  border-radius: 6px;
+}
+.route-choices-section h4 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  text-align: center;
+  color: #333;
+}
+.route-choice-card {
+  background-color: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 15px;
+  margin-bottom: 15px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.route-choice-card h5 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  color: #0056b3; /* Blue heading for card title */
+}
+.route-choice-card p {
+  font-size: 0.95em;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.btn-select-route { /* Specific class for select buttons if needed, or use .btn-primary */
+  display: block;
+  width: 100%; /* Make button full width of card */
+  padding: 10px 15px;
 }
 
 </style>
