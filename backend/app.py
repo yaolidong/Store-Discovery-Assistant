@@ -158,16 +158,16 @@ def _parse_transit_polyline(transit_details):
     """
     polylines = []
     if transit_details and transit_details.get("segments"):
-        for segment in transit_details["segments"]:
+        for segment_detail in transit_details["segments"]: # Renamed to avoid conflict
             # Each segment (walking, bus, subway) can have a polyline
-            if segment.get("walking") and segment["walking"].get("polyline"):
-                polylines.append(segment["walking"]["polyline"])
-            if segment.get("bus") and segment["bus"].get("polylines"):
-                 for pl_bus in segment["bus"]["polylines"]: # Bus might have multiple polylines
-                    if pl_bus.get("polyline"):
-                        polylines.append(pl_bus.get("polyline"))
-            if segment.get("railway") and segment["railway"].get("polyline"): # For subway/train
-                 polylines.append(segment["railway"]["polyline"])
+            if segment_detail.get("walking") and segment_detail["walking"].get("polyline"):
+                polylines.append(segment_detail["walking"]["polyline"])
+            if segment_detail.get("bus") and segment_detail["bus"].get("buslines"): # Check buslines for polylines
+                 for busline in segment_detail["bus"]["buslines"]:
+                    if busline.get("polyline"):
+                        polylines.append(busline["polyline"])
+            if segment_detail.get("railway") and segment_detail["railway"].get("polyline"): # For subway/train
+                 polylines.append(segment_detail["railway"]["polyline"])
             # Other transit types like "taxi" might not have polylines or are handled differently.
     return ";".join(filter(None, polylines)) if polylines else None
 
@@ -177,8 +177,7 @@ def get_public_transit_segment_details(api_key, origin_lat, origin_lng, dest_lat
     Gets public transit route details using Amap Integrated Directions API.
     `city` is the origin city code or name.
     Strategy: 0 for recommended, other values for different preferences (e.g., less walking).
-    Returns a dictionary like {"distance": meters, "duration": seconds, "polyline": "concatenated_polyline_string"} or None.
-    Distance for transit is often walking distance + transit line distance, can be complex. Amap returns 'distance' field for the whole transit path.
+    Returns a dictionary with overall distance, duration, cost, walking_distance, and detailed segments_details.
     """
     if not api_key:
         return None
@@ -205,15 +204,73 @@ def get_public_transit_segment_details(api_key, origin_lat, origin_lng, dest_lat
             # The 'polyline' for the entire transit path is not directly provided in 'transits' object usually.
             # It's often part of individual segments (walking, bus, subway lines).
             # We need to concatenate them or use a primary segment's polyline.
-            # For simplicity, _parse_transit_polyline will try to build one.
+            # _parse_transit_polyline can be used for an overview polyline.
             # Amap's total 'distance' for transit includes walking and in-vehicle. 'duration' is total time.
 
-            full_polyline = _parse_transit_polyline(transit_path)
+            overview_polyline = _parse_transit_polyline(transit_path) # For overall route representation
+
+            segments_details = []
+            if transit_path.get("segments"):
+                for segment in transit_path["segments"]:
+                    segment_info = {}
+                    # Walking segment
+                    if segment.get("walking") and isinstance(segment["walking"], dict):
+                        walk_data = segment["walking"]
+                        segment_info["type"] = "walk"
+                        segment_info["distance"] = int(walk_data.get("distance", 0))
+                        segment_info["duration"] = int(walk_data.get("duration", 0))
+                        # Combine instructions from steps
+                        instruction_parts = []
+                        if walk_data.get("steps") and isinstance(walk_data["steps"], list):
+                            for step in walk_data["steps"]:
+                                if step.get("instruction"):
+                                    instruction_parts.append(step["instruction"])
+                        segment_info["instruction"] = "; ".join(instruction_parts) if instruction_parts else "Walk"
+                        segment_info["polyline"] = walk_data.get("polyline")
+                        segments_details.append(segment_info)
+
+                    # Bus segment
+                    elif segment.get("bus") and isinstance(segment["bus"], dict) and segment["bus"].get("buslines"):
+                        bus_data = segment["bus"]
+                        for busline in bus_data.get("buslines", []): # Iterate through potentially multiple buslines
+                            bus_info = {}
+                            bus_info["type"] = "bus"
+                            bus_info["line_name"] = busline.get("name")
+                            bus_info["line_type"] = busline.get("type") # Use 'type' as per Amap docs for bus type
+                            if busline.get("departure_stop"):
+                                bus_info["departure_stop"] = busline["departure_stop"].get("name")
+                            if busline.get("arrival_stop"):
+                                bus_info["arrival_stop"] = busline["arrival_stop"].get("name")
+                            bus_info["polyline"] = busline.get("polyline")
+                            bus_info["distance"] = int(busline.get("distance", 0))
+                            bus_info["duration"] = int(busline.get("duration", 0))
+                            segments_details.append(bus_info)
+
+                    # Railway segment (Subway/Train)
+                    elif segment.get("railway") and isinstance(segment["railway"], dict):
+                        rail_data = segment["railway"]
+                        segment_info["type"] = "railway" # Could be "subway" or "train" based on rail_data.type
+                        segment_info["name"] = rail_data.get("name")
+                        segment_info["line_type"] = rail_data.get("type") # e.g., "地铁线路" (Subway Line)
+                        if rail_data.get("departure_stop"):
+                             segment_info["departure_stop"] = rail_data["departure_stop"].get("name")
+                        if rail_data.get("arrival_stop"):
+                            segment_info["arrival_stop"] = rail_data["arrival_stop"].get("name")
+                        segment_info["polyline"] = rail_data.get("polyline")
+                        segment_info["distance"] = int(rail_data.get("distance", 0))
+                        segment_info["duration"] = int(rail_data.get("duration", 0))
+                        # Amap might also have 'trip_id', 'spaces' (compartments) etc. for railways
+                        segments_details.append(segment_info)
+
+                    # TODO: Handle other segment types if necessary (e.g., taxi, though usually not mixed in integrated transit)
 
             return {
-                "distance": int(transit_path.get("distance", 0)), # Overall distance
-                "duration": int(transit_path.get("duration", 0)), # Overall duration
-                "polyline": full_polyline
+                "distance": int(transit_path.get("distance", 0)),
+                "duration": int(transit_path.get("duration", 0)),
+                "cost": transit_path.get("cost", {}).get("amount", 0.0) if isinstance(transit_path.get("cost"), dict) else transit_path.get("cost", 0.0), # Cost can be a dict or a direct value
+                "walking_distance": int(transit_path.get("walking_distance", 0)),
+                "polyline": overview_polyline, # Overview polyline for the whole transit path
+                "segments_details": segments_details
             }
         else:
             print(f"Amap Public Transit Error: {data.get('info')} from ({origin_lng},{origin_lat}) to ({dest_lng},{dest_lat}) in city {city}")
@@ -221,7 +278,7 @@ def get_public_transit_segment_details(api_key, origin_lat, origin_lng, dest_lat
     except requests.exceptions.RequestException as e:
         print(f"Amap Public Transit request failed: {e}")
         return None
-    except (ValueError, KeyError, IndexError) as e:
+    except (ValueError, KeyError, IndexError, TypeError) as e: # Added TypeError
         print(f"Error parsing Amap Public Transit response: {e}")
         return None
     return None
@@ -243,7 +300,7 @@ def get_driving_route_segment_details(api_key, origin_lat, origin_lng, dest_lat,
         "origin": f"{origin_lng},{origin_lat}",
         "destination": f"{dest_lng},{dest_lat}",
         "strategy": str(strategy),
-        "extensions": "base", # Request basic route information, "all" for steps and traffic
+        "extensions": "all", # Request basic route information, "all" for steps and traffic
     }
 
     try:
@@ -505,13 +562,20 @@ def optimize_route():
     # Keep original shop data to return in optimized_order
     home_point = {
         "id": "home",
-        "name": "Home",
+        "name": "Home", # Default name for home
         "latitude": home_location_data['latitude'],
         "longitude": home_location_data['longitude'],
         "stay_duration": 0 # Home has no stay duration in this context
     }
     # Ensure shops_data now contains validated/defaulted stay_duration
-    all_points_objects = [home_point] + shops_data # Store full objects for reference
+    # Ensure 'name' exists for all shops, use 'id' as fallback if 'name' is missing
+    processed_shops_data = []
+    for shop_d in shops_data:
+        if 'name' not in shop_d or not shop_d['name']: # Check for missing or empty name
+            shop_d['name'] = f"Shop {shop_d['id']}" # Fallback name
+        processed_shops_data.append(shop_d)
+
+    all_points_objects = [home_point] + processed_shops_data # Store full objects for reference
 
     # Create a list of (lat, lon) for distance matrix calculation
     all_coords = [(p['latitude'], p['longitude']) for p in all_points_objects]
@@ -594,8 +658,12 @@ def optimize_route():
             "to_id": all_points_objects[v]["id"],
             "distance": segment_info['distance'],
             "duration": segment_info['duration'], # This is travel time for the segment
-            "polyline": segment_info['polyline']
+            "polyline": segment_info.get('polyline') # Overview polyline for this leg
         })
+        # If public transit, add the detailed segments
+        if mode == "public_transit" and "segments_details" in segment_info:
+            route_segments_details[-1]["transit_details"] = segment_info["segments_details"]
+
         total_travel_duration += segment_info['duration']
 
     # Calculate total stay duration for shops in the chosen path
@@ -611,7 +679,8 @@ def optimize_route():
         'optimized_order': optimized_order_objects,
         'total_distance': min_total_distance, # This is purely travel distance
         'total_duration': overall_total_duration, # Travel time + Stay time
-        'route_segments': route_segments_details # Segments only show travel time
+        'route_segments': route_segments_details, # Segments only show travel time
+        'mode': mode # Include the travel mode in the response
     }), 200
 
 

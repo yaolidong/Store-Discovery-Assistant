@@ -170,8 +170,30 @@ export default {
 
       // Draw polylines for each segment
       routeData.route_segments.forEach(segment => {
-        if (segment.polyline) {
-          // Assuming polyline is a string like "lng1,lat1;lng2,lat2;..."
+        // Check if it's public transit and has detailed steps
+        if (routeData.mode === 'public_transit' && segment.transit_details && segment.transit_details.length > 0) {
+          segment.transit_details.forEach(step => {
+            if (step.polyline) {
+              const path = step.polyline.split(';').map(coordStr => {
+                const parts = coordStr.split(',');
+                return new AMap.LngLat(parseFloat(parts[0]), parseFloat(parts[1]));
+              });
+
+              if (path.length > 0) {
+                const styleOptions = this.getPolylineStyleForTransitType(step.type);
+                const polyline = new AMap.Polyline({
+                  path: path,
+                  strokeColor: styleOptions.strokeColor,
+                  strokeStyle: styleOptions.strokeStyle,
+                  strokeOpacity: 0.8,
+                  strokeWeight: styleOptions.strokeWeight,
+                });
+                this.map.add(polyline);
+                this.currentRoutePolylines.push(polyline);
+              }
+            }
+          });
+        } else if (segment.polyline) { // Fallback for driving or if transit_details are missing
           const path = segment.polyline.split(';').map(coordStr => {
             const parts = coordStr.split(',');
             return new AMap.LngLat(parseFloat(parts[0]), parseFloat(parts[1]));
@@ -180,11 +202,10 @@ export default {
           if (path.length > 0) {
             const polyline = new AMap.Polyline({
               path: path,
-              strokeColor: "#3366FF", // Default color
+              strokeColor: "#3366FF", // Default color for driving or overview transit
               strokeOpacity: 0.8,
               strokeWeight: 6,
-              // borderWeight: 1, // Optional: Add a border to the polyline
-              // strokeStyle: "solid", // "solid" or "dashed"
+              strokeStyle: "solid",
             });
             this.map.add(polyline);
             this.currentRoutePolylines.push(polyline);
@@ -215,6 +236,33 @@ export default {
         const overlayGroup = new AMap.OverlayGroup([...this.currentRoutePolylines, ...this.currentRouteMarkers]);
         this.map.setFitView(overlayGroup.getOverlays(), false, [60, 60, 60, 60], 18); // false for immediate, 60px padding, maxZoom 18
       }
+    },
+    getPolylineStyleForTransitType(type) {
+      // Default style
+      const style = {
+        strokeColor: "#555555", // Dark grey for unknown or other types
+        strokeStyle: "solid",
+        strokeWeight: 5,
+      };
+      if (!type) return style;
+
+      const lowerType = type.toLowerCase();
+
+      if (lowerType.includes('walk')) {
+        style.strokeColor = "#4CAF50"; // Green for walking
+        style.strokeStyle = "dashed";
+        style.strokeWeight = 5;
+      } else if (lowerType.includes('bus')) {
+        style.strokeColor = "#FF5722"; // Deep Orange for bus
+        style.strokeStyle = "solid";
+        style.strokeWeight = 6;
+      } else if (lowerType.includes('railway') || lowerType.includes('subway') || lowerType.includes('train')) {
+        style.strokeColor = "#2196F3"; // Blue for subway/rail
+        style.strokeStyle = "solid";
+        style.strokeWeight = 7;
+      }
+      // Add more types as needed (e.g., taxi, ferry)
+      return style;
     },
     displayRoute(originAddress, destinationAddress) {
       if (!this.map) {
