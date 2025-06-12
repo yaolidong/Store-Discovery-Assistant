@@ -79,20 +79,20 @@ def geocode_address(api_key, address, city=None):
                     "formatted_address": geocode_info.get("formatted_address")
                 }
         else:
-            print(f"Amap Geocoding Error: {data.get('info')} for address: {address}")
+            app.logger.warning(f"Amap Geocoding Error: {data.get('info')} for address: {address}")
             return None
     except requests.exceptions.RequestException as e:
-        print(f"Amap Geocoding request failed: {e}")
+        app.logger.error(f"Amap Geocoding request failed: {e}")
         return None
     except (ValueError, KeyError) as e:
-        print(f"Error parsing Amap Geocoding response: {e}")
+        app.logger.error(f"Error parsing Amap Geocoding response: {e}")
         return None
     return None
 
-def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=None):
+def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=None, limit=20):
     """
     Searches for POIs using Amap Place Text Search API.
-    Returns a list of POI dictionaries or None.
+    Returns a list of POI dictionaries up to the specified limit, or None.
     """
     if not api_key or not keywords:
         return None
@@ -101,7 +101,7 @@ def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=N
     params = {
         "key": api_key,
         "keywords": keywords,
-        "offset": 20, # Number of results per page (max 25)
+        "offset": limit, # Number of results per page (max 25, controlled by limit)
         "page": 1,
     }
     if city:
@@ -138,15 +138,15 @@ def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=N
                     "tel": poi.get("tel"),
                     "distance": poi.get("distance") # if location is provided
                 })
-            return pois_data
+            return pois_data[:limit] # Ensure we don't return more than limit
         else:
-            print(f"Amap POI Search Error: {data.get('info')} for keywords: {keywords}")
+            app.logger.warning(f"Amap POI Search Error: {data.get('info')} for keywords: {keywords}")
             return None
     except requests.exceptions.RequestException as e:
-        print(f"Amap POI Search request failed: {e}")
+        app.logger.error(f"Amap POI Search request failed: {e}")
         return None
     except (ValueError, KeyError) as e:
-        print(f"Error parsing Amap POI Search response: {e}")
+        app.logger.error(f"Error parsing Amap POI Search response: {e}")
         return None
     return None
 
@@ -216,13 +216,13 @@ def get_public_transit_segment_details(api_key, origin_lat, origin_lng, dest_lat
                 "polyline": full_polyline
             }
         else:
-            print(f"Amap Public Transit Error: {data.get('info')} from ({origin_lng},{origin_lat}) to ({dest_lng},{dest_lat}) in city {city}")
+            app.logger.warning(f"Amap Public Transit Error: {data.get('info')} from ({origin_lng},{origin_lat}) to ({dest_lng},{dest_lat}) in city {city}")
             return None
     except requests.exceptions.RequestException as e:
-        print(f"Amap Public Transit request failed: {e}")
+        app.logger.error(f"Amap Public Transit request failed: {e}")
         return None
     except (ValueError, KeyError, IndexError) as e:
-        print(f"Error parsing Amap Public Transit response: {e}")
+        app.logger.error(f"Error parsing Amap Public Transit response: {e}")
         return None
     return None
 
@@ -260,13 +260,13 @@ def get_driving_route_segment_details(api_key, origin_lat, origin_lng, dest_lat,
                 "polyline": path.get("polyline") # Polyline for drawing on map
             }
         else:
-            print(f"Amap Routing Error: {data.get('info')} from ({origin_lng},{origin_lat}) to ({dest_lng},{dest_lat})")
+            app.logger.warning(f"Amap Routing Error: {data.get('info')} from ({origin_lng},{origin_lat}) to ({dest_lng},{dest_lat})")
             return None
     except requests.exceptions.RequestException as e:
-        print(f"Amap Routing request failed: {e}")
+        app.logger.error(f"Amap Routing request failed: {e}")
         return None
     except (ValueError, KeyError, IndexError) as e: # Added IndexError for path[0]
-        print(f"Error parsing Amap Routing response: {e}")
+        app.logger.error(f"Error parsing Amap Routing response: {e}")
         return None
     return None
 
@@ -274,23 +274,15 @@ def get_driving_route_segment_details(api_key, origin_lat, origin_lng, dest_lat,
 # --- API Endpoints ---
 @app.route('/api/register', methods=['POST'])
 def register():
-    print("Received registration request")
-    print("Request headers:", dict(request.headers))
-    print("Request data:", request.get_data())
-    print("Request JSON:", request.get_json())
-    print("Request form:", request.form)
-    print("Request args:", request.args)
-    
     data = request.get_json()
     if not data:
-        print("No JSON data received")
+        app.logger.warning("Registration attempt with no JSON data.")
         return jsonify({'message': 'No JSON data received'}), 400
         
     username = data.get('username')
     password = data.get('password')
     
-    print("Extracted username:", username)
-    print("Extracted password:", password)
+    app.logger.info(f"Registration attempt for username: {username}")
 
     if not username or not password:
         return jsonify({'message': 'Username and password are required'}), 400
@@ -463,61 +455,26 @@ def find_shops():
                     'error': last_error
                 }), 500
 
-# --- Route Optimization Endpoint ---
+# --- Route Optimization Logic ---
 MAX_SHOPS_FOR_PERMUTATIONS = 6 # Max shops (N) for permutation-based TSP
 
-@app.route('/api/route/optimize', methods=['POST'])
-@login_required
-def optimize_route():
-    data = request.get_json()
-    if not data:
-        return jsonify({'message': 'Request body must be JSON.'}), 400
-
-    home_location_data = data.get('home_location')
-    shops_data = data.get('shops')
-    mode = data.get('mode', 'driving')
-    city_param = data.get('city') # City name or adcode, used for public transit
-
-    if not home_location_data or 'latitude' not in home_location_data or 'longitude' not in home_location_data:
-        return jsonify({'message': 'Missing or invalid "home_location". It must be an object with "latitude" and "longitude".'}), 400
-
-    if not shops_data or not isinstance(shops_data, list) or len(shops_data) == 0:
-        return jsonify({'message': 'Missing or invalid "shops". It must be a non-empty list of shop objects.'}), 400
-
-    for shop in shops_data:
-        if 'latitude' not in shop or 'longitude' not in shop or 'id' not in shop or 'name' not in shop:
-            return jsonify({'message': 'Each shop in "shops" must have "id", "name", "latitude", and "longitude".'}), 400
-        # Validate stay_duration if provided
-        if 'stay_duration' in shop:
-            if not isinstance(shop['stay_duration'], (int, float)) or shop['stay_duration'] < 0:
-                return jsonify({'message': f'Optional "stay_duration" for shop {shop.get("id", "")} must be a non-negative number.'}), 400
-        else:
-            shop['stay_duration'] = 0 # Default to 0 if not provided
-
-    api_key = app.config.get('AMAP_API_KEY')
+def _calculate_optimized_route_for_points(api_key, home_point_with_details, shops_with_details_list, mode, city_param, max_shops_limit):
+    """
+    Internal helper to calculate an optimized route (TSP) for a set of points.
+    Returns a tuple: (result_dict, error_tuple).
+    result_dict is the successful response. error_tuple is (message, status_code) on error.
+    """
     if not api_key:
-        return jsonify({'message': 'Amap API key not configured on server.'}), 500
+        return None, ({'message': 'Amap API key not configured on server.'}, 500)
 
-    if len(shops_data) > MAX_SHOPS_FOR_PERMUTATIONS:
-        return jsonify({'message': f'Too many shops for optimization. Please select {MAX_SHOPS_FOR_PERMUTATIONS} or fewer shops.'}), 400
+    if len(shops_with_details_list) > max_shops_limit:
+        return None, ({'message': f'Too many shops for optimization. Please select {max_shops_limit} or fewer shops.'}, 400)
 
-    # Prepare points: Home is point 0, shops are 1 to N
-    # Keep original shop data to return in optimized_order
-    home_point = {
-        "id": "home",
-        "name": "Home",
-        "latitude": home_location_data['latitude'],
-        "longitude": home_location_data['longitude'],
-        "stay_duration": 0 # Home has no stay duration in this context
-    }
-    # Ensure shops_data now contains validated/defaulted stay_duration
-    all_points_objects = [home_point] + shops_data # Store full objects for reference
+    all_points_objects = [home_point_with_details] + shops_with_details_list
 
-    # Create a list of (lat, lon) for distance matrix calculation
     all_coords = [(p['latitude'], p['longitude']) for p in all_points_objects]
     num_points = len(all_coords)
 
-    # Build distance matrix: cost_matrix[i][j] stores {'distance': d, 'duration': t, 'polyline': pl}
     cost_matrix = [[None for _ in range(num_points)] for _ in range(num_points)]
 
     for i in range(num_points):
@@ -527,45 +484,40 @@ def optimize_route():
 
             segment_details = None
             if mode == "public_transit":
-                if not city_param: # City is crucial for public transit
-                    return jsonify({'message': 'Missing "city" parameter in request body, required for public transit mode.'}), 400
+                if not city_param:
+                    return None, ({'message': 'Missing "city" parameter, required for public transit mode.'}, 400)
                 segment_details = get_public_transit_segment_details(api_key, p1_lat, p1_lon, p2_lat, p2_lon, city_param)
             else: # Default to driving
                 segment_details = get_driving_route_segment_details(api_key, p1_lat, p1_lon, p2_lat, p2_lon)
 
             if segment_details is None:
-                return jsonify({'message': f'Failed to get {mode} route details between {all_points_objects[i]["name"]} and {all_points_objects[j]["name"]}. Cannot optimize.'}), 500
+                err_msg = f'Failed to get {mode} route details between {all_points_objects[i]["name"]} and {all_points_objects[j]["name"]}. Cannot optimize.'
+                return None, ({'message': err_msg}, 500)
 
             cost_matrix[i][j] = segment_details
-            # For public transit, cost might not be symmetric, but for permutation TSP, we often assume it or build full matrix.
-            # For simplicity here, if we need symmetric for TSP algo, we might need to call API twice or use this value.
-            # However, Amap's transit duration can vary significantly based on direction due to one-way lines etc.
-            # For a more accurate TSP with public transit, matrix might need cost_matrix[j][i] fetched separately.
-            # For now, assume symmetry for simplicity of TSP distance calc, but this is a known limitation.
-            cost_matrix[j][i] = segment_details
+            cost_matrix[j][i] = segment_details # Assuming symmetry for simplicity
 
-    # TSP using permutations for shops (points 1 to num_points-1)
-    shop_indices = list(range(1, num_points)) # Indices of shops in all_coords/all_points_objects
-
+    shop_indices = list(range(1, num_points))
     min_total_distance = float('inf')
-    best_path_indices = [] # Stores indices relative to all_coords
+    best_path_indices = []
 
-    if not shop_indices: # Only home location, no shops
-        return jsonify({
-            'optimized_order': [home_point],
+    if not shop_indices: # Only home location
+        result = {
+            'optimized_order': [home_point_with_details],
             'total_distance': 0,
-            'total_duration': 0,
+            'total_duration': 0, # home_point_with_details['stay_duration'] is 0
             'route_segments': []
-        }), 200
+        }
+        return result, None
 
     for p in itertools.permutations(shop_indices):
         current_distance = 0
         current_path_indices = [0] + list(p) + [0] # Home -> Shops -> Home
 
         valid_permutation = True
-        for i in range(len(current_path_indices) - 1):
-            u, v = current_path_indices[i], current_path_indices[i+1]
-            if cost_matrix[u][v] is None: # Should have been caught earlier, but as a safeguard
+        for i_seg in range(len(current_path_indices) - 1):
+            u, v = current_path_indices[i_seg], current_path_indices[i_seg+1]
+            if cost_matrix[u][v] is None:
                 valid_permutation = False
                 break
             current_distance += cost_matrix[u][v]['distance']
@@ -575,54 +527,300 @@ def optimize_route():
             best_path_indices = current_path_indices
 
     if not best_path_indices:
-        return jsonify({'message': 'Could not find an optimal route. Check segment routing.'}), 500
+        return None, ({'message': 'Could not find an optimal route. Check segment routing.'}, 500)
 
-    # Construct final response with full segment details for the best path
     optimized_order_objects = [all_points_objects[i] for i in best_path_indices]
     route_segments_details = []
     total_travel_duration = 0
     total_stay_duration = 0
 
-    # Calculate total travel duration from segments
-    for i in range(len(best_path_indices) - 1):
-        u, v = best_path_indices[i], best_path_indices[i+1]
-        segment_info = cost_matrix[u][v] # Already fetched, includes polyline
+    for i_seg in range(len(best_path_indices) - 1):
+        u, v = best_path_indices[i_seg], best_path_indices[i_seg+1]
+        segment_info = cost_matrix[u][v]
         route_segments_details.append({
             "from_name": all_points_objects[u]["name"],
             "to_name": all_points_objects[v]["name"],
             "from_id": all_points_objects[u]["id"],
             "to_id": all_points_objects[v]["id"],
             "distance": segment_info['distance'],
-            "duration": segment_info['duration'], # This is travel time for the segment
+            "duration": segment_info['duration'],
             "polyline": segment_info['polyline']
         })
         total_travel_duration += segment_info['duration']
 
-    # Calculate total stay duration for shops in the chosen path
-    # The first and last points in best_path_indices are 'home', which has stay_duration 0.
-    # Shops are all_points_objects[idx] where idx is in best_path_indices[1:-1]
-    for shop_idx_in_all_points in best_path_indices[1:-1]: # Exclude home at start and end
-        # all_points_objects already has stay_duration (either provided or defaulted to 0)
+    for shop_idx_in_all_points in best_path_indices[1:-1]:
         total_stay_duration += all_points_objects[shop_idx_in_all_points].get('stay_duration', 0)
 
     overall_total_duration = total_travel_duration + total_stay_duration
 
-    return jsonify({
+    result = {
         'optimized_order': optimized_order_objects,
-        'total_distance': min_total_distance, # This is purely travel distance
-        'total_duration': overall_total_duration, # Travel time + Stay time
-        'route_segments': route_segments_details # Segments only show travel time
-    }), 200
+        'total_distance': min_total_distance,
+        'total_duration': overall_total_duration,
+        'route_segments': route_segments_details
+    }
+    return result, None
 
+# --- API Endpoints ---
+
+@app.route('/api/route/optimize', methods=['POST'])
+@login_required
+def optimize_route():
+    data = request.get_json()
+    if not data:
+        return jsonify({'message': 'Request body must be JSON.'}), 400
+
+    home_location_data = data.get('home_location')
+    shops_data = data.get('shops') # This is shops_with_details_list
+    mode = data.get('mode', 'driving')
+    city_param = data.get('city')
+
+    if not home_location_data or 'latitude' not in home_location_data or 'longitude' not in home_location_data:
+        return jsonify({'message': 'Missing or invalid "home_location". It must be an object with "latitude" and "longitude".'}), 400
+
+    if not shops_data or not isinstance(shops_data, list): # Allow empty list for just home
+        return jsonify({'message': 'Invalid "shops". It must be a list of shop objects.'}), 400
+
+    # Validate shops_data structure and content
+    for shop in shops_data:
+        if not all(k in shop for k in ['latitude', 'longitude', 'id', 'name']):
+            return jsonify({'message': 'Each shop in "shops" must have "id", "name", "latitude", and "longitude".'}), 400
+        if 'stay_duration' in shop:
+            if not isinstance(shop['stay_duration'], (int, float)) or shop['stay_duration'] < 0:
+                return jsonify({'message': f'Optional "stay_duration" for shop {shop.get("id", "")} must be a non-negative number.'}), 400
+        else:
+            shop['stay_duration'] = 0 # Default if not provided
+
+    api_key = app.config.get('AMAP_API_KEY')
+    # api_key check is inside _calculate_optimized_route_for_points
+
+    home_point = {
+        "id": "home",
+        "name": "Home",
+        "latitude": home_location_data['latitude'],
+        "longitude": home_location_data['longitude'],
+        "stay_duration": 0
+    }
+
+    result, error = _calculate_optimized_route_for_points(
+        api_key,
+        home_point,
+        shops_data, # Already validated and processed
+        mode,
+        city_param,
+        MAX_SHOPS_FOR_PERMUTATIONS
+    )
+
+    if error:
+        return jsonify(error[0]), error[1]
+
+    return jsonify(result), 200
+
+@app.route('/api/routes/generate_options', methods=['POST'])
+@login_required
+def generate_route_options():
+    data = request.get_json()
+    if not data:
+        return jsonify({'message': 'Request body must be JSON.'}), 400
+
+    home_location = data.get('home_location')
+    shop_requests = data.get('shop_requests')
+    mode = data.get('mode', 'driving') # Default to driving
+    city = data.get('city') # Optional, but required for public_transit
+
+    # Validate home_location
+    if not home_location or not isinstance(home_location, dict) or \
+       'latitude' not in home_location or 'longitude' not in home_location:
+        return jsonify({'message': 'Missing or invalid "home_location". It must be an object with "latitude" and "longitude".'}), 400
+    try:
+        float(home_location['latitude'])
+        float(home_location['longitude'])
+    except (ValueError, TypeError):
+        return jsonify({'message': 'Invalid coordinates in "home_location". Latitude and longitude must be numbers.'}), 400
+
+    # Validate shop_requests
+    if not shop_requests or not isinstance(shop_requests, list):
+        return jsonify({'message': 'Missing or invalid "shop_requests". It must be a list.'}), 400
+
+    if not shop_requests: # If list is empty, it's a valid scenario (just go home)
+        pass # Or handle as a specific case if needed, e.g. return home location only.
+
+    for i, req in enumerate(shop_requests):
+        if not isinstance(req, dict):
+            return jsonify({'message': f'Invalid item in "shop_requests" at index {i}. Each item must be an object.'}), 400
+        if 'name' not in req or not isinstance(req['name'], str) or not req['name'].strip():
+            return jsonify({'message': f'Missing or invalid "name" in shop_requests item at index {i}. Name must be a non-empty string.'}), 400
+
+        # Validate stay_duration_minutes (optional, defaults to 0 if not present)
+        stay_duration_minutes = req.get('stay_duration_minutes', 0)
+        if not isinstance(stay_duration_minutes, (int, float)) or stay_duration_minutes < 0:
+            return jsonify({'message': f'Invalid "stay_duration_minutes" for shop request "{req["name"]}" (index {i}). Must be a non-negative number.'}), 400
+        req['stay_duration_seconds'] = stay_duration_minutes * 60 # Convert to seconds for internal use
+
+        # Validate max_candidates (optional, defaults to e.g. 1 or 3 if not present)
+        max_candidates = req.get('max_candidates', 3) # Default to 3 candidates
+        if not isinstance(max_candidates, int) or max_candidates <= 0:
+            return jsonify({'message': f'Invalid "max_candidates" for shop request "{req["name"]}" (index {i}). Must be a positive integer.'}), 400
+        req['max_candidates'] = max_candidates # Store validated value
+
+    # Validate mode
+    if not isinstance(mode, str) or mode not in ['driving', 'public_transit']: # Add other modes if supported
+        return jsonify({'message': 'Invalid "mode". Supported modes are "driving", "public_transit".'}), 400
+
+    # Validate city for public_transit
+    if mode == 'public_transit' and (not city or not isinstance(city, str) or not city.strip()):
+        return jsonify({'message': 'Missing or invalid "city". City is required for "public_transit" mode.'}), 400
+
+    api_key = app.config.get('AMAP_API_KEY')
+    if not api_key:
+        return jsonify({'message': 'Amap API key not configured on server.'}), 500
+
+    # Define limits for this endpoint
+    MAX_SHOP_NAMES_FOR_OPTIONS = 3
+    MAX_TOTAL_COMBINATIONS = 10
+    DEFAULT_SEARCH_RADIUS_METERS = 15000
+
+    if len(shop_requests) > MAX_SHOP_NAMES_FOR_OPTIONS:
+        return jsonify({'message': f'Too many shop requests. Maximum is {MAX_SHOP_NAMES_FOR_OPTIONS}.'}), 400
+
+    if not shop_requests: # No shops requested, just return home to home.
+        home_point_details = {
+            "id": "home", "name": "Home",
+            "latitude": home_location['latitude'], "longitude": home_location['longitude'],
+            "stay_duration": 0
+        }
+        # Effectively, this is an optimization for zero shops.
+        # _calculate_optimized_route_for_points handles this if shops_with_details_list is empty.
+        result, error = _calculate_optimized_route_for_points(
+            api_key, home_point_details, [], mode, city, MAX_SHOPS_FOR_PERMUTATIONS # MAX_SHOPS_FOR_PERMUTATIONS is for individual TSP
+        )
+        if error:
+            return jsonify(error[0]), error[1]
+        return jsonify({'options': [result]}), 200
+
+
+    # 1. Candidate Fetching
+    all_shop_candidates = [] # List of lists, e.g., [[ShopA_Cand1, ShopA_Cand2], [ShopB_Cand1]]
+    for i, req in enumerate(shop_requests):
+        shop_name_query = req['name']
+        limit_candidates = req['max_candidates']
+        stay_duration_seconds = req['stay_duration_seconds']
+
+        city_for_search = city # Use main request city if provided
+        location_for_search = None
+        radius_for_search = DEFAULT_SEARCH_RADIUS_METERS
+
+        if not city_for_search: # If no city in main request, use home location for search context
+            location_for_search = f"{home_location['longitude']},{home_location['latitude']}"
+
+        # search_poi(api_key, keywords, city=None, location=None, radius=5000, types=None, limit=20)
+        poi_results = search_poi(
+            api_key=api_key,
+            keywords=shop_name_query,
+            city=city_for_search,
+            location=location_for_search,
+            radius=radius_for_search,
+            limit=limit_candidates
+        )
+
+        if poi_results is None: # Error during search_poi
+            return jsonify({'message': f'Error searching for candidates for "{shop_name_query}".'}), 500
+        if not poi_results: # No candidates found
+            return jsonify({'message': f'No candidates found for shop request "{shop_name_query}".'}), 404
+
+        current_shop_candidates = []
+        for poi in poi_results:
+            # Ensure POI has lat/lon, otherwise it's unusable for routing
+            if poi.get('latitude') is None or poi.get('longitude') is None:
+                app.logger.warning(f"POI candidate {poi.get('name')} for '{shop_name_query}' is missing coordinates, skipping.")
+                continue
+
+            candidate = poi.copy() # Copy POI details
+            candidate['stay_duration'] = stay_duration_seconds # Add stay_duration from original request
+            candidate['original_request_name'] = shop_name_query # For clarity in results
+            current_shop_candidates.append(candidate)
+
+        if not current_shop_candidates: # All POIs lacked coordinates
+             return jsonify({'message': f'No valid (with coordinates) candidates found for shop request "{shop_name_query}".'}), 404
+
+        all_shop_candidates.append(current_shop_candidates)
+
+    # 2. Generate Combinations
+    # Calculate total number of combinations
+    num_combinations = 1
+    for candidates_list in all_shop_candidates:
+        num_combinations *= len(candidates_list)
+
+    if num_combinations == 0: # Should be caught by earlier checks, but as a safeguard
+        return jsonify({'message': 'No candidates found for one or more shop requests, cannot generate routes.'}), 404
+
+    if num_combinations > MAX_TOTAL_COMBINATIONS:
+        return jsonify({'message': f'Too many potential route combinations ({num_combinations}). Maximum allowed is {MAX_TOTAL_COMBINATIONS}. Please reduce number of shops or candidates per shop.'}), 400
+
+    shop_combinations = list(itertools.product(*all_shop_candidates))
+
+    # 3. Process Combinations
+    route_options = []
+    home_point_details = {
+        "id": "home", "name": "Home",
+        "latitude": home_location['latitude'], "longitude": home_location['longitude'],
+        "stay_duration": 0
+    }
+
+    for combo_shops_list in shop_combinations:
+        # combo_shops_list is a tuple of shop candidate dicts, e.g., (cand_A1, cand_B1)
+        # Each shop in combo_shops_list already has lat, lon, id, name, stay_duration
+
+        # The _calculate_optimized_route_for_points expects shops_with_details_list
+        # which should be a list of dicts. combo_shops_list is already in this format.
+        # Ensure that the number of shops in this specific combo does not exceed MAX_SHOPS_FOR_PERMUTATIONS
+        # This check is actually inside _calculate_optimized_route_for_points.
+
+        route_result, error_info = _calculate_optimized_route_for_points(
+            api_key,
+            home_point_details,
+            list(combo_shops_list), # Convert tuple to list for the helper
+            mode,
+            city, # city_param for transit
+            MAX_SHOPS_FOR_PERMUTATIONS # max_shops_limit for individual TSP calculation
+        )
+
+        if error_info:
+            app.logger.warning(f"Skipping a route combination due to error: {error_info[0]['message']}")
+            # Optionally, log this error or store it to return partial failures
+            continue
+
+        if route_result:
+            # Add the specific shops used in this option for clarity in the response
+            route_result['shops_in_this_option'] = [
+                {
+                    "id": shop.get("id"),
+                    "name": shop.get("name"),
+                    "address": shop.get("address"),
+                    "original_request_name": shop.get("original_request_name"),
+                    "stay_duration_minutes": shop.get("stay_duration", 0) / 60
+                } for shop in combo_shops_list
+            ]
+            route_options.append(route_result)
+
+    # 4. Sort and Return Results
+    if not route_options:
+        return jsonify({'message': 'No valid route options could be generated.'}), 404
+
+    # Sort by total_duration, then total_distance
+    route_options.sort(key=lambda x: (x.get('total_duration', float('inf')), x.get('total_distance', float('inf'))))
+
+    return jsonify({'options': route_options}), 200
 
 # --- Database Initialization ---
 def init_db():
     with app.app_context():
         db.create_all()
-    print("Database initialized!")
+    app.logger.info("Database initialized!")
 
 # Initialize database when the app starts
 init_db()
 
 if __name__ == '__main__':
+    # Consider adding basic logging configuration here if not handled by Flask/Gunicorn in production
     app.run(debug=True, host='0.0.0.0') # In a production environment, use a WSGI server like Gunicorn or uWSGI.

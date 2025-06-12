@@ -87,10 +87,33 @@
     <hr class="separator"/>
 
     <div class="shops-to-visit-section">
-      <h3>Shops to Visit</h3>
-      <form @submit.prevent="addShop" class="add-shop-form">
+      <h3>Desired Shops for Route Options</h3>
+      <form @submit.prevent="addDesiredShop" class="add-shop-form options-form">
+        <div class="form-group">
+          <label for="desiredShopName">Shop Name:</label>
+          <input type="text" id="desiredShopName" v-model="desiredShopName" placeholder="e.g., KFC, Starbucks" required />
+        </div>
+        <div class="form-group">
+          <label for="desiredShopStayDuration">Stay Duration (minutes):</label>
+          <input type="number" id="desiredShopStayDuration" v-model.number="desiredShopStayDuration" min="0" />
+        </div>
+        <div class="form-group">
+          <label for="desiredShopMaxCandidates">Max Candidates to Search:</label>
+          <input type="number" id="desiredShopMaxCandidates" v-model.number="desiredShopMaxCandidates" min="1" />
+        </div>
+        <button type="submit" class="btn-primary">Add Shop for Options</button>
+      </form>
+
+      <hr/>
+      <h3>Shops List (for Options or Direct Confirmation)</h3>
+      <p class="info-text">
+        Shops added "for Options" will be used in "Find Best Route Options". <br/>
+        You can also add shops directly by name below, then "Search/Find" to confirm a specific location for the older "Plan My Day!" button.
+      </p>
+      <!-- Existing Add Shop form for single confirmation -->
+      <form @submit.prevent="addShopToList" class="add-shop-form">
         <div class="form-group shop-input-container">
-          <label for="shopInput">Shop Name:</label>
+          <label for="shopInput">Shop Name (for direct search/confirmation):</label>
           <input 
             type="text" 
             id="shopInput" 
@@ -101,7 +124,6 @@
             placeholder="Enter a shop name" 
             autocomplete="off"
           />
-          <!-- 店铺建议下拉框 -->
           <div v-if="showShopSuggestions && shopSuggestions.length > 0" class="shop-suggestions">
             <div 
               v-for="suggestion in shopSuggestions" 
@@ -115,49 +137,73 @@
             </div>
           </div>
         </div>
-        <button type="submit" class="btn-primary">Add Shop</button>
+        <button type="submit" class="btn-secondary">Add for Direct Search</button>
       </form>
 
       <ul v-if="shopsToVisit.length > 0" class="shops-list">
-        <li v-for="shop in shopsToVisit" :key="shop.id" class="shop-item">
+        <li v-for="shop in shopsToVisit" :key="shop.id" class="shop-item" :class="`status-${shop.status || 'default'}`">
           <div class="shop-info">
             <span class="shop-name">{{ shop.name }}</span>
+
             <span v-if="shop.status === 'confirmed'" class="shop-address-confirmed">
-              📍 {{ shop.address }} (Confirmed)
+              📍 {{ shop.address }} (Confirmed for Legacy Route)
             </span>
-            <div v-if="shop.status === 'confirmed'" class="shop-stay-duration">
+            <span v-else-if="shop.status === 'pending_selection'" class="shop-details-pending">
+              (For New Options Route)
+            </span>
+            <span v-else-if="shop.status === 'awaiting_search'" class="shop-details-pending">
+              (Status: Pending Search Confirmation)
+            </span>
+             <span v-else class="shop-details-pending">
+              (Status: Not yet processed)
+            </span>
+
+            <div v-if="shop.status === 'confirmed' || shop.status === 'pending_selection'" class="shop-stay-duration">
               <label :for="'stayDuration-' + shop.id" class="stay-duration-label">Stay (minutes):</label>
               <input
                 type="number"
                 :id="'stayDuration-' + shop.id"
                 v-model.number="shop.stayDurationMinutes"
                 min="0"
-                placeholder="0"
+                placeholder="30"
                 class="stay-duration-input"
               />
             </div>
+            <div v-if="shop.status === 'pending_selection'" class="shop-max-candidates">
+              <label :for="'maxCandidates-' + shop.id" class="max-candidates-label">Max Candidates:</label>
+              <input
+                type="number"
+                :id="'maxCandidates-' + shop.id"
+                v-model.number="shop.maxCandidates"
+                min="1"
+                placeholder="3"
+                class="max-candidates-input"
+              />
+            </div>
+
           </div>
           <div class="shop-item-actions">
             <button
+              v-if="shop.status === 'awaiting_search' || shop.status === 'confirmed'"
               @click="findShopOnMap(shop)"
-              :class="{'btn-success': shop.status === 'confirmed', 'btn-info': shop.status !== 'confirmed'}"
+              :class="{'btn-success': shop.status === 'confirmed', 'btn-info': shop.status === 'awaiting_search'}"
               class="btn-small"
-              :disabled="isLoadingShops && selectedShopForSearch.id === shop.id"
+              :disabled="isLoadingShops && selectedShopForSearch && selectedShopForSearch.id === shop.id"
             >
-              {{ isLoadingShops && selectedShopForSearch.id === shop.id ? 'Searching...' : (shop.status === 'confirmed' ? 'Re-Search' : 'Search/Find') }}
+              {{ isLoadingShops && selectedShopForSearch && selectedShopForSearch.id === shop.id ? 'Searching...' : (shop.status === 'confirmed' ? 'Re-Search' : 'Search/Confirm') }}
             </button>
-            <button @click="removeShop(shop.id)" class="btn-danger btn-small" :disabled="isLoadingShops">Remove</button>
+            <button @click="removeShop(shop.id)" class="btn-danger btn-small" :disabled="isLoadingShops || isFetchingRouteOptions">Remove</button>
           </div>
         </li>
       </ul>
       <p v-else class="no-shops-message">No shops added yet. Add some above!</p>
 
       <!-- Search Results / Disambiguation Section -->
-      <div v-if="isLoadingShops && searchResults.length === 0 && selectedShopForSearch.id" class="loading-shops-indicator">
+      <div v-if="isLoadingShops && searchResults.length === 0 && selectedShopForSearch && selectedShopForSearch.id" class="loading-shops-indicator">
         <p>Searching for "{{selectedShopForSearch.name}}"... Please wait.</p>
       </div>
-      <div v-if="!isLoadingShops && searchResults.length > 0 && selectedShopForSearch.id" class="search-results-section">
-        <h4>Select the correct shop for: "{{ selectedShopForSearch.name }}"</h4>
+      <div v-if="!isLoadingShops && searchResults.length > 0 && selectedShopForSearch && selectedShopForSearch.id" class="search-results-section">
+        <h4>Select the correct shop for: "{{ selectedShopForSearch.name }}" (Direct Confirmation)</h4>
         <ul class="search-results-list">
           <li v-for="candidate in searchResults" :key="candidate.id" class="search-result-item">
             <div>
@@ -175,27 +221,87 @@
     <hr class="separator"/>
 
     <div class="route-optimization-section">
-      <h3>Route Optimization</h3>
-
-      <div class="form-group travel-mode-selection">
+      <h3>Generate Route Options (New)</h3>
+      <div class="form-group travel-mode-selection"> <!-- Re-used travel mode selection -->
         <label>Travel Mode:</label>
-        <label for="modeDriving">
-          <input type="radio" id="modeDriving" value="driving" v-model="selectedTravelMode"> Driving
+        <label for="modeDrivingOptions">
+          <input type="radio" id="modeDrivingOptions" value="driving" v-model="selectedTravelMode"> Driving
         </label>
-        <label for="modeTransit">
-          <input type="radio" id="modeTransit" value="public_transit" v-model="selectedTravelMode"> Public Transit
+        <label for="modeTransitOptions">
+          <input type="radio" id="modeTransitOptions" value="public_transit" v-model="selectedTravelMode"> Public Transit
         </label>
       </div>
-
-      <div v-if="selectedTravelMode === 'public_transit'" class="form-group">
-        <label for="homeCityName">Origin City for Transit (e.g., "Beijing" or city code):</label>
-        <input type="text" id="homeCityName" v-model="homeCityName" :placeholder="selectedCity || '请输入城市名'" />
+      <div v-if="selectedTravelMode === 'public_transit'" class="form-group"> <!-- Re-used city input -->
+        <label for="homeCityNameOptions">Origin City for Transit:</label>
+        <input type="text" id="homeCityNameOptions" v-model="homeCityName" :placeholder="selectedCity || 'Enter city name/code'" />
         <small v-if="!homeCityName" class="text-danger">City is required for public transit mode.</small>
       </div>
+      <button
+        @click="fetchRouteOptions"
+        :disabled="!canFetchRouteOptions || isFetchingRouteOptions || (selectedTravelMode === 'public_transit' && !homeCityName)"
+        class="btn-success btn-large"
+      >
+        {{ isFetchingRouteOptions ? 'Fetching Options...' : 'Find Best Route Options' }}
+      </button>
+       <p v-if="!canFetchRouteOptions && !isFetchingRouteOptions" class="route-calculation-condition">
+        Please set home, add shops "for Options", and specify city if transit.
+      </p>
 
+      <!-- Display Route Options List -->
+      <div v-if="isFetchingRouteOptions" class="loading-indicator">Fetching route options...</div>
+      <div v-if="routeOptionsList.length > 0 && !isFetchingRouteOptions" class="route-options-display">
+        <h4>Available Route Options:</h4>
+        <ul class="route-options-list">
+          <li v-for="(option, index) in routeOptionsList" :key="index" class="route-option-item">
+            <h5>Option {{ index + 1 }}</h5>
+            <p>
+              <strong>Shops:</strong>
+              <span v-for="(shop, shopIndex) in option.shops_in_this_option" :key="shop.id || shopIndex" class="option-shop-name">
+                {{ shop.name }} (at {{ shop.address || 'Chosen Location' }}){{ shopIndex < option.shops_in_this_option.length - 1 ? ', ' : '' }}
+              </span>
+            </p>
+            <p>
+              Total Distance: {{ (option.total_distance / 1000).toFixed(2) }} km |
+              Total Duration: {{ Math.round(option.total_duration / 60) }} minutes
+            </p>
+            <button @click="selectRouteOption(option)" class="btn-primary btn-small">Select This Option</button>
+          </li>
+        </ul>
+      </div>
+      <p v-if="routeOptionsList.length === 0 && !isFetchingRouteOptions && fetchRouteOptionsAttempted" class="no-options-message">
+        No route options could be generated with the current shops and settings.
+      </p>
+      <hr v-if="routeOptionsList.length > 0 || optimizedRouteData "/>
+      <!-- Display for SELECTED route option (could reuse parts of optimizedRouteData display) -->
+      <div v-if="selectedRouteOptionDetails" class="optimized-route-details">
+        <h4>Selected Route Itinerary:</h4>
+        <p>
+          <strong>Total Distance:</strong> {{ (selectedRouteOptionDetails.total_distance / 1000).toFixed(2) }} km<br>
+          <strong>Total Duration:</strong> {{ Math.round(selectedRouteOptionDetails.total_duration / 60) }} minutes
+        </p>
+        <h5>Route:</h5>
+        <ul class="route-steps-list">
+          <li v-for="(point, index) in selectedRouteOptionDetails.optimized_order" :key="point.id + '-' + index" class="route-step">
+            <strong>{{ index + 1 }}. {{ point.name }}</strong>
+            <div v-if="index < selectedRouteOptionDetails.route_segments.length" class="segment-details">
+              &nbsp;&nbsp;&nbsp;&nbsp;⇩ To {{ selectedRouteOptionDetails.route_segments[index].to_name }}:
+              {{ (selectedRouteOptionDetails.route_segments[index].distance / 1000).toFixed(2) }} km,
+              {{ Math.round(selectedRouteOptionDetails.route_segments[index].duration / 60) }} min
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <hr class="separator"/>
+
+    <div class="route-optimization-section legacy-optimization">
+      <h3>Plan My Day! (Original Single Route Optimization)</h3>
+       <p class="info-text">This uses only "Confirmed" shops for a single optimized route.</p>
+       <!-- Travel mode and city input are shared or could be duplicated if needed for independent control -->
       <button
         @click="calculateOptimizedRoute"
-        :disabled="!canCalculateRoute || isCalculatingRoute || (selectedTravelMode === 'public_transit' && !homeCityName)"
+        :disabled="!canCalculateRouteLegacy || isCalculatingRoute || (selectedTravelMode === 'public_transit' && !homeCityName)"
         class="btn-primary btn-large"
       >
         {{ isCalculatingRoute ? 'Calculating Route...' : 'Plan My Day! (Optimized Route)' }}
@@ -294,19 +400,33 @@ export default {
       mapPickModeEnabled: false, // For controlling map pick mode
 
       // Shops to visit
-      shopInput: '',
-      shopsToVisit: [], // Array of { id: Date.now(), name: 'Shop Name', address?, lat?, lon?, status? }
+      shopInput: '', // For existing single shop search/confirm
+      shopsToVisit: [], // Array of shops. Structure will be enhanced.
+                      // { id, name, address?, lat?, lon?, status ('pending_selection', 'confirmed', 'awaiting_search'),
+                      //   stayDurationMinutes?, maxCandidates? (for pending_selection) }
 
-      // Shop Search & Disambiguation
-      searchResults: [], // Stores results from /api/shops/find
-      selectedShopForSearch: { id: null, name: '' }, // Shop from shopsToVisit being searched
-      isLoadingShops: false, // Loading indicator for shop search
+      // New inputs for adding a shop to be used in "generate options"
+      desiredShopName: '',
+      desiredShopStayDuration: 30,
+      desiredShopMaxCandidates: 3,
 
-      // Optimized Route
-      optimizedRouteData: null, // Stores response from /api/route/optimize
-      isCalculatingRoute: false, // Loading indicator for route calculation
-      selectedTravelMode: 'driving', // 'driving' or 'public_transit'
-      homeCityName: '', // Placeholder for city name/code for transit.
+      // Shop Search & Disambiguation (for single shop confirmation)
+      searchResults: [],
+      selectedShopForSearch: { id: null, name: '' },
+      isLoadingShops: false,
+
+      // Optimized Route (existing functionality)
+      optimizedRouteData: null,
+      isCalculatingRoute: false,
+
+      // New: Route Options (from /api/routes/generate_options)
+      routeOptionsList: [],
+      selectedRouteOptionDetails: null,
+      isFetchingRouteOptions: false,
+      fetchRouteOptionsAttempted: false, // To know if an attempt was made, for displaying "no options" message
+
+      selectedTravelMode: 'driving',
+      homeCityName: '',
 
       // Schedule Display
       defaultStartTime: '09:00:00', // e.g., 9 AM
@@ -324,14 +444,38 @@ export default {
     pickHomeButtonText() {
       return this.mapPickModeEnabled ? 'Cancel Picking on Map' : 'Pick Home on Map';
     },
-    canCalculateRoute() {
-      // Check if home location is set and there's at least one confirmed shop
+    pickHomeButtonText() {
+      return this.mapPickModeEnabled ? 'Cancel Picking on Map' : 'Pick Home on Map';
+    },
+    canCalculateRouteLegacy() { // Renamed for clarity
       const homeSet = this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude;
       const confirmedShopsExist = this.shopsToVisit.some(shop => shop.status === 'confirmed');
       return homeSet && confirmedShopsExist;
+    },
+    canFetchRouteOptions() {
+      const homeSet = this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude;
+      const pendingShopsExist = this.shopsToVisit.some(shop => shop.status === 'pending_selection');
+      return homeSet && pendingShopsExist;
     }
   },
   methods: {
+    addDesiredShop() {
+      if (this.desiredShopName.trim() === '') {
+        alert('Please enter a shop name.');
+        return;
+      }
+      this.shopsToVisit.push({
+        id: Date.now() + Math.random(), // Ensure more unique ID
+        name: this.desiredShopName.trim(),
+        stayDurationMinutes: this.desiredShopStayDuration,
+        maxCandidates: this.desiredShopMaxCandidates,
+        status: 'pending_selection',
+        // address, lat, lon will be determined by the chosen option
+      });
+      this.desiredShopName = ''; // Reset form
+      this.desiredShopStayDuration = 30;
+      this.desiredShopMaxCandidates = 3;
+    },
     async fetchHomeLocation() {
       try {
         const response = await axios.get('/api/user/home'); // Assumes cookie-based auth
@@ -410,25 +554,28 @@ export default {
       this.$router.push('/login');
     },
     // Methods for Shops to Visit
-    addShop() {
-      if (this.shopInput.trim() !== '') {
-        // 如果有建议且输入框内容与第一个建议匹配，直接选择
+    addShopToList() { // Renamed from addShop for clarity
+      const trimmedShopInput = this.shopInput.trim().toLowerCase();
+      if (trimmedShopInput !== '') {
         if (this.shopSuggestions.length > 0) {
           const firstSuggestion = this.shopSuggestions[0];
-          if (firstSuggestion.name.toLowerCase().includes(this.shopInput.toLowerCase())) {
-            this.selectShopSuggestion(firstSuggestion);
+          // Change to startsWith for stricter auto-selection
+          if (firstSuggestion.name.toLowerCase().startsWith(trimmedShopInput)) {
+            this.selectShopSuggestion(firstSuggestion); // This will add it as 'confirmed'
             return;
           }
         }
-        
-        // 否则按原来的方式添加（需要后续搜索确认）
+        // If no auto-selection, add as 'awaiting_search'
         this.shopsToVisit.push({
-          id: Date.now(),
+          id: Date.now() + Math.random(),
           name: this.shopInput.trim(),
+          status: 'awaiting_search', // New status
+          stayDurationMinutes: 0, // Default, can be changed after confirmation
+          maxCandidates: 3 // Default, not used for this flow but good for consistency
         });
         this.shopInput = '';
       } else {
-        alert('请输入店铺名称。');
+        alert('Please enter a shop name for direct search.');
       }
     },
     removeShop(shopId) {
@@ -479,22 +626,27 @@ export default {
     confirmShopSelection(selectedCandidate) {
       const shopIndex = this.shopsToVisit.findIndex(s => s.id === this.selectedShopForSearch.id);
       if (shopIndex !== -1) {
-        // Create a new object for reactivity if shopsToVisit items are complex
-        // or directly update if simple and Vue detects changes.
-        // For safety and reactivity, creating a new object or using Vue.set for new properties is good.
+        const existingShop = this.shopsToVisit[shopIndex];
         const updatedShop = {
-          ...this.shopsToVisit[shopIndex], // Keep original id and any other properties
-          name: selectedCandidate.name,    // Amap might return a more formal name
+          ...existingShop, // Spread existing properties first
+          name: selectedCandidate.name, // Amap might return a more formal name
           address: selectedCandidate.address,
           latitude: selectedCandidate.latitude,
           longitude: selectedCandidate.longitude,
-          status: 'confirmed',
-          amap_id: selectedCandidate.id, // Store Amap POI ID if needed
-          stayDurationMinutes: 0 // Initialize stay duration
+          status: 'confirmed', // Critical update
+          amap_id: selectedCandidate.id, // Store Amap POI ID
         };
-        this.shopsToVisit.splice(shopIndex, 1, updatedShop); // Replace item reactively
+        // Ensure stayDurationMinutes is initialized if it wasn't
+        if (typeof updatedShop.stayDurationMinutes === 'undefined') {
+          updatedShop.stayDurationMinutes = 0;
+        }
+        // MaxCandidates is not directly relevant for 'confirmed' shops in the same way, but ensure it exists
+        if (typeof updatedShop.maxCandidates === 'undefined') {
+          updatedShop.maxCandidates = 1; // Or some default
+        }
 
-        alert(`Shop "${updatedShop.name}" confirmed with address: ${updatedShop.address}.`);
+        this.shopsToVisit.splice(shopIndex, 1, updatedShop); // Replace item reactively
+        alert(`Shop "${updatedShop.name}" confirmed with address: ${updatedShop.address}. You can now set its stay duration.`);
       } else {
         alert("Error: Could not find the original shop in your list to update.");
       }
@@ -502,19 +654,18 @@ export default {
       this.searchResults = [];
       this.selectedShopForSearch = { id: null, name: '' };
     },
-    async calculateOptimizedRoute() {
-      if (!this.canCalculateRoute) {
-        alert("Please set your home location and confirm at least one shop before calculating the route.");
+    async calculateOptimizedRoute() { // This is the LEGACY route calculation
+      if (!this.canCalculateRouteLegacy) { // Corrected computed property name
+        alert("Please set home and confirm at least one shop for legacy route calculation.");
         return;
       }
 
       this.isCalculatingRoute = true;
-      this.optimizedRouteData = null; // Clear previous route data
-      this.displayableSchedule = null; // Clear previous schedule
-      if (this.$refs.mapDisplay) { // Clear previous route from map
-         this.$refs.mapDisplay.clearMapElements();
-      }
-
+      this.optimizedRouteData = null;
+      this.displayableSchedule = null;
+      this.selectedRouteOptionDetails = null; // Clear new route option details
+      this.routeOptionsList = []; // Clear new route options list
+      if (this.$refs.mapDisplay) this.$refs.mapDisplay.clearMapElements();
 
       const confirmedShops = this.shopsToVisit
         .filter(shop => shop.status === 'confirmed')
@@ -586,6 +737,113 @@ export default {
         this.displayableSchedule = null; // Clear schedule on error
       } finally {
         this.isCalculatingRoute = false;
+      }
+    },
+    // New method to fetch route options
+    async fetchRouteOptions() {
+      if (!this.canFetchRouteOptions) {
+        alert("Please set home location and add at least one shop 'for Options'.");
+        return;
+      }
+      this.isFetchingRouteOptions = true;
+      this.routeOptionsList = [];
+      this.selectedRouteOptionDetails = null;
+      this.optimizedRouteData = null; // Clear legacy route
+      this.displayableSchedule = null;
+      this.fetchRouteOptionsAttempted = true; // Flag that an attempt was made
+      if (this.$refs.mapDisplay) this.$refs.mapDisplay.clearMapElements();
+
+      const shopRequestsForAPI = this.shopsToVisit
+        .filter(shop => shop.status === 'pending_selection')
+        .map(shop => ({
+          name: shop.name,
+          stay_duration_minutes: shop.stayDurationMinutes,
+          max_candidates: shop.maxCandidates,
+        }));
+
+      if (shopRequestsForAPI.length === 0) {
+        alert("No shops marked 'for Options' are available.");
+        this.isFetchingRouteOptions = false;
+        return;
+      }
+
+      const payload = {
+        home_location: {
+          latitude: this.currentHomeLocation.latitude,
+          longitude: this.currentHomeLocation.longitude,
+        },
+        shop_requests: shopRequestsForAPI,
+        mode: this.selectedTravelMode,
+      };
+      if (this.selectedTravelMode === 'public_transit') {
+        if (!this.homeCityName.trim()) {
+          alert("City name is required for public transit.");
+          this.isFetchingRouteOptions = false;
+          return;
+        }
+        payload.city = this.homeCityName.trim();
+      }
+
+      // console.log("Payload for /api/routes/generate_options:", JSON.stringify(payload, null, 2));
+      // Simulate API call delay
+      // setTimeout(() => {
+      //   // Example successful response structure (replace with actual API call later)
+      //   const mockResponse = {
+      //     data: {
+      //       options: [
+      //         {
+      //           total_distance: 15000,
+      //           total_duration: 3600, // 60 minutes
+      //           shops_in_this_option: shopRequestsForAPI.map(s => ({name: s.name, address: "Mock Address " + s.name, stay_duration_minutes: s.stay_duration_minutes})),
+      //           optimized_order: [{name: "Home"}, ...shopRequestsForAPI.map(s => ({name: s.name, stay_duration: s.stay_duration_minutes * 60})), {name: "Home"}],
+      //           route_segments: [] // Populate if needed for drawing
+      //         },
+      //         // Add more mock options if desired
+      //       ]
+      //     }
+      //   };
+      //   // this.routeOptionsList = mockResponse.data.options; // Uncomment when API call is real
+      //   alert("Route options would be fetched. Check console for payload. (Mocked for now)");
+      //   this.isFetchingRouteOptions = false;
+      // }, 2000);
+
+      // Actual API Call
+      try {
+        const response = await axios.post('/api/routes/generate_options', payload);
+        if (response.data.options && response.data.options.length > 0) {
+          this.routeOptionsList = response.data.options;
+        } else {
+          alert(response.data.message || "No route options generated by the server.");
+          this.routeOptionsList = [];
+        }
+      } catch (error) {
+        console.error('Error fetching route options:', error);
+        let alertMessage = `Error fetching route options: ${error.message}`;
+        if (error.response) {
+          // Check for specific 400 errors from backend for API limits
+          if (error.response.status === 400 && error.response.data && error.response.data.message) {
+            // Backend should provide a clear message about limits.
+            alertMessage = `Could not fetch options: ${error.response.data.message} Please adjust your inputs (e.g., fewer shop types or candidates).`;
+          } else if (error.response.data && error.response.data.message) {
+             alertMessage = `Error: ${error.response.data.message}`;
+          } else {
+            alertMessage = `An unexpected error occurred (Status: ${error.response.status}).`;
+          }
+        }
+        alert(alertMessage);
+        this.routeOptionsList = [];
+      } finally {
+        this.isFetchingRouteOptions = false;
+      }
+    },
+    selectRouteOption(option) {
+      this.selectedRouteOptionDetails = option;
+      this.optimizedRouteData = null; // Clear legacy data
+      this.displayableSchedule = this.generateDisplaySchedule(option); // Generate schedule for selected option
+      if (this.$refs.mapDisplay) {
+        this.showMap = true;
+        this.$refs.mapDisplay.clearMapElements(); // Clear previous drawings
+        this.$refs.mapDisplay.drawOptimizedRoute(option); // Draw the selected route
       }
     },
     generateDisplaySchedule(routeData) {
