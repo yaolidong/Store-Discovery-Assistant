@@ -1,5 +1,28 @@
 <template>
   <div id="map-container" style="width: 100%; height: 500px;"></div>
+  <div v-if="showRouteInfo && routeInfo" class="route-info">
+    <div class="route-summary">
+      <h3>路线摘要</h3>
+      <p>总时间: {{ routeSummary.totalTime }}</p>
+      <p>总距离: {{ routeSummary.totalDistance }}</p>
+      <p>出行方式: {{ travelMode === 'TRANSIT' ? '公交' : travelMode === 'DRIVING' ? '驾车' : '步行' }}</p>
+    </div>
+    
+    <div class="route-details">
+      <h3>详细路线</h3>
+      <div v-for="(segment, index) in routeInfo.segments" :key="index" class="route-segment">
+        <div class="segment-header">
+          <span class="segment-number">{{ index + 1 }}</span>
+          <span class="segment-name">{{ segment.name }}</span>
+        </div>
+        <div class="segment-details">
+          <p v-if="segment.duration">时间: {{ formatDuration(segment.duration) }}</p>
+          <p v-if="segment.distance">距离: {{ formatDistance(segment.distance) }}</p>
+          <p v-if="segment.instructions">{{ segment.instructions }}</p>
+        </div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script>
@@ -20,6 +43,10 @@ export default {
       mapClickListener: null, // To store the map click listener function
       currentRoutePolylines: [], // Stores AMap.Polyline objects for the optimized route
       currentRouteMarkers: [],   // Stores AMap.Marker objects for the optimized route
+      showRouteInfo: false,
+      routeInfo: null,
+      routeSummary: null,
+      travelMode: 'DRIVING'
     };
   },
   watch: {
@@ -276,6 +303,170 @@ export default {
       //   offset: new AMap.Pixel(0, -30)
       // });
       // infoWindow.open(this.map, this.currentMarker.getPosition());
+    },
+    async planDrivingRoute(waypoints) {
+      return new Promise((resolve, reject) => {
+        if (!this.map) {
+          reject(new Error('地图未初始化'));
+          return;
+        }
+
+        AMap.plugin('AMap.Driving', () => {
+          const driving = new AMap.Driving({
+            map: this.map,
+            policy: AMap.DrivingPolicy.LEAST_TIME
+          });
+
+          const start = waypoints[0].location;
+          const end = waypoints[waypoints.length - 1].location;
+          const waypointsList = waypoints.slice(1, -1).map(wp => wp.location);
+
+          driving.search(start, end, {
+            waypoints: waypointsList
+          }, (status, result) => {
+            if (status === 'complete' && result.info === 'OK') {
+              const route = result.routes[0];
+              const segments = route.steps.map((step, index) => ({
+                name: waypoints[index]?.name || `路段 ${index + 1}`,
+                duration: step.time,
+                distance: step.distance,
+                instructions: step.instruction
+              }));
+
+              this.routeInfo = {
+                segments,
+                totalDistance: route.distance,
+                totalTime: route.time
+              };
+
+              this.routeSummary = {
+                totalTime: this.formatDuration(route.time),
+                totalDistance: this.formatDistance(route.distance),
+                mode: 'DRIVING'
+              };
+
+              this.showRouteInfo = true;
+              resolve(this.routeInfo);
+            } else {
+              reject(new Error(result?.info || '路线规划失败'));
+            }
+          });
+        });
+      });
+    },
+    async planTransitRoute(waypoints) {
+      return new Promise((resolve, reject) => {
+        if (!this.map) {
+          reject(new Error('地图未初始化'));
+          return;
+        }
+
+        AMap.plugin('AMap.Transit', () => {
+          const transit = new AMap.Transit({
+            map: this.map,
+            policy: AMap.TransitPolicy.LEAST_TIME
+          });
+
+          const start = waypoints[0].location;
+          const end = waypoints[waypoints.length - 1].location;
+          const waypointsList = waypoints.slice(1, -1).map(wp => wp.location);
+
+          transit.search(start, end, {
+            waypoints: waypointsList
+          }, (status, result) => {
+            if (status === 'complete' && result.info === 'OK') {
+              const route = result.routes[0];
+              const segments = route.transits.map((transit, index) => ({
+                name: waypoints[index]?.name || `路段 ${index + 1}`,
+                duration: transit.time,
+                distance: transit.distance,
+                instructions: transit.instructions
+              }));
+
+              this.routeInfo = {
+                segments,
+                totalDistance: route.distance,
+                totalTime: route.time
+              };
+
+              this.routeSummary = {
+                totalTime: this.formatDuration(route.time),
+                totalDistance: this.formatDistance(route.distance),
+                mode: 'TRANSIT'
+              };
+
+              this.showRouteInfo = true;
+              resolve(this.routeInfo);
+            } else {
+              reject(new Error(result?.info || '路线规划失败'));
+            }
+          });
+        });
+      });
+    },
+    async planWalkingRoute(waypoints) {
+      return new Promise((resolve, reject) => {
+        if (!this.map) {
+          reject(new Error('地图未初始化'));
+          return;
+        }
+
+        AMap.plugin('AMap.Walking', () => {
+          const walking = new AMap.Walking({
+            map: this.map,
+            policy: AMap.WalkingPolicy.LEAST_TIME
+          });
+
+          const start = waypoints[0].location;
+          const end = waypoints[waypoints.length - 1].location;
+          const waypointsList = waypoints.slice(1, -1).map(wp => wp.location);
+
+          walking.search(start, end, {
+            waypoints: waypointsList
+          }, (status, result) => {
+            if (status === 'complete' && result.info === 'OK') {
+              const route = result.routes[0];
+              const segments = route.steps.map((step, index) => ({
+                name: waypoints[index]?.name || `路段 ${index + 1}`,
+                duration: step.time,
+                distance: step.distance,
+                instructions: step.instruction
+              }));
+
+              this.routeInfo = {
+                segments,
+                totalDistance: route.distance,
+                totalTime: route.time
+              };
+
+              this.routeSummary = {
+                totalTime: this.formatDuration(route.time),
+                totalDistance: this.formatDistance(route.distance),
+                mode: 'WALKING'
+              };
+
+              this.showRouteInfo = true;
+              resolve(this.routeInfo);
+            } else {
+              reject(new Error(result?.info || '路线规划失败'));
+            }
+          });
+        });
+      });
+    },
+    formatDuration(seconds) {
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      if (hours > 0) {
+        return `${hours}小时${minutes}分钟`;
+      }
+      return `${minutes}分钟`;
+    },
+    formatDistance(meters) {
+      if (meters >= 1000) {
+        return `${(meters / 1000).toFixed(1)}公里`;
+      }
+      return `${meters}米`;
     }
   },
   beforeUnmount() {
@@ -300,5 +491,72 @@ export default {
 #map-container {
   border: 1px solid #ccc;
   border-radius: 4px;
+}
+
+.route-info {
+  margin-top: 20px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.route-summary {
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.route-summary h3 {
+  color: #333;
+  margin-bottom: 10px;
+}
+
+.route-summary p {
+  margin: 5px 0;
+  color: #666;
+}
+
+.route-details h3 {
+  color: #333;
+  margin-bottom: 15px;
+}
+
+.route-segment {
+  margin-bottom: 15px;
+  padding: 10px;
+  background: white;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.segment-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.segment-number {
+  width: 24px;
+  height: 24px;
+  background: #007bff;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 10px;
+  font-size: 14px;
+}
+
+.segment-name {
+  font-weight: bold;
+  color: #333;
+}
+
+.segment-details p {
+  margin: 5px 0;
+  color: #666;
+  font-size: 14px;
 }
 </style>

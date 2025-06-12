@@ -5,6 +5,7 @@ from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+import time
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -271,11 +272,25 @@ def get_driving_route_segment_details(api_key, origin_lat, origin_lng, dest_lat,
 
 
 # --- API Endpoints ---
-@app.route('/register', methods=['POST'])
+@app.route('/api/register', methods=['POST'])
 def register():
+    print("Received registration request")
+    print("Request headers:", dict(request.headers))
+    print("Request data:", request.get_data())
+    print("Request JSON:", request.get_json())
+    print("Request form:", request.form)
+    print("Request args:", request.args)
+    
     data = request.get_json()
+    if not data:
+        print("No JSON data received")
+        return jsonify({'message': 'No JSON data received'}), 400
+        
     username = data.get('username')
     password = data.get('password')
+    
+    print("Extracted username:", username)
+    print("Extracted password:", password)
 
     if not username or not password:
         return jsonify({'message': 'Username and password are required'}), 400
@@ -289,7 +304,7 @@ def register():
     db.session.commit()
     return jsonify({'message': 'User registered successfully'}), 201
 
-@app.route('/login', methods=['POST'])
+@app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
     username = data.get('username')
@@ -302,7 +317,7 @@ def login():
         return jsonify({'message': 'Logged in successfully'}), 200
     return jsonify({'message': 'Invalid username or password'}), 401
 
-@app.route('/logout', methods=['POST'])
+@app.route('/api/logout', methods=['POST'])
 @login_required
 def logout():
     logout_user()
@@ -379,7 +394,6 @@ def get_home_location():
 
 # --- Shop Search Endpoint ---
 @app.route('/api/shops/find', methods=['POST'])
-@login_required
 def find_shops():
     data = request.get_json()
     if not data:
@@ -410,25 +424,44 @@ def find_shops():
     # Default radius for location-based search (e.g., 10km)
     radius = data.get('radius', 10000)
 
-    # Call the search_poi utility function
-    # For now, types parameter is not exposed via this endpoint, but could be added
-    results = search_poi(
-        api_key=api_key,
-        keywords=keywords,
-        city=city,
-        location=location_str,
-        radius=radius if location_str else 5000 # Default radius if location is used
-    )
+    # 添加重试机制
+    max_retries = 3
+    retry_count = 0
+    last_error = None
 
-    if results is None:
-        # This case implies an error occurred during the API call in search_poi
-        # search_poi function already prints errors, so here we return a generic server error
-        return jsonify({'message': 'Error occurred while searching for shops.'}), 500
+    while retry_count < max_retries:
+        try:
+            # Call the search_poi utility function
+            results = search_poi(
+                api_key=api_key,
+                keywords=keywords,
+                city=city,
+                location=location_str,
+                radius=radius if location_str else 5000 # Default radius if location is used
+            )
 
-    if not results: # Empty list means no POIs found
-        return jsonify({'message': 'No shops found matching your query.'}), 404
+            if results is None:
+                # This case implies an error occurred during the API call in search_poi
+                # search_poi function already prints errors, so here we return a generic server error
+                return jsonify({'message': 'Error occurred while searching for shops.'}), 500
 
-    return jsonify({'shops': results}), 200
+            if not results: # Empty list means no POIs found
+                return jsonify({'message': 'No shops found matching your query.'}), 404
+
+            return jsonify({'shops': results}), 200
+
+        except Exception as e:
+            last_error = str(e)
+            retry_count += 1
+            if retry_count < max_retries:
+                time.sleep(1)  # 等待1秒后重试
+                continue
+            else:
+                app.logger.error(f"Failed to search shops after {max_retries} retries. Last error: {last_error}")
+                return jsonify({
+                    'message': 'Failed to search shops after multiple attempts.',
+                    'error': last_error
+                }), 500
 
 # --- Route Optimization Endpoint ---
 MAX_SHOPS_FOR_PERMUTATIONS = 6 # Max shops (N) for permutation-based TSP
@@ -588,8 +621,8 @@ def init_db():
         db.create_all()
     print("Database initialized!")
 
+# Initialize database when the app starts
+init_db()
+
 if __name__ == '__main__':
-    # Create database tables if they don't exist
-    if not os.path.exists('travel_planner.db'):
-        init_db()
-    app.run(debug=True) # In a production environment, use a WSGI server like Gunicorn or uWSGI.
+    app.run(debug=True, host='0.0.0.0') # In a production environment, use a WSGI server like Gunicorn or uWSGI.

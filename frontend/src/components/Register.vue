@@ -8,7 +8,7 @@
       </div>
       <div class="form-group">
         <label for="password">Password:</label>
-        <input type="password" id="password" v.model="password" required>
+        <input type="password" id="password" v-model="password" required>
       </div>
       <button type="submit">Register</button>
     </form>
@@ -38,15 +38,23 @@ export default {
       this.successMessage = '';
       this.errorMessage = '';
       try {
-        // Adjust the URL to where your backend is running, e.g., http://localhost:5000/register
+        console.log('Sending registration data:', {
+          username: this.username,
+          password: this.password
+        });
         const response = await axios.post('/api/register', {
           username: this.username,
           password: this.password
+        }, {
+          headers: {
+            'Content-Type': 'application/json'
+          }
         });
         this.successMessage = response.data.message;
         alert('Registration successful! Please login.');
         this.$router.push('/login'); // Redirect to login page after successful registration
       } catch (error) {
+        console.error('Registration error details:', error);
         if (error.response && error.response.data && error.response.data.message) {
           this.errorMessage = error.response.data.message;
         } else if (error.request) {
@@ -54,7 +62,6 @@ export default {
         } else {
           this.errorMessage = 'Registration failed. Please try again.';
         }
-        console.error('Registration error:', error);
       }
     }
   }

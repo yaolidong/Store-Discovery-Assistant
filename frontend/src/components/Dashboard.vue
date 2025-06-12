@@ -4,6 +4,34 @@
     <p>This is where your amazing trip planning features will reside.</p>
     <p>Plan new trips, view existing ones, and manage your travel itineraries.</p>
 
+    <!-- 城市选择部分 -->
+    <div class="city-selection-section">
+      <h3>选择您的城市</h3>
+      <div class="form-group">
+        <label for="citySelect">城市选择:</label>
+        <select id="citySelect" v-model="selectedCity" @change="onCityChange" class="city-select">
+          <option value="">请选择城市</option>
+          <option value="北京">北京</option>
+          <option value="上海">上海</option>
+          <option value="广州">广州</option>
+          <option value="深圳">深圳</option>
+          <option value="杭州">杭州</option>
+          <option value="南京">南京</option>
+          <option value="成都">成都</option>
+          <option value="武汉">武汉</option>
+          <option value="西安">西安</option>
+          <option value="重庆">重庆</option>
+          <option value="天津">天津</option>
+          <option value="苏州">苏州</option>
+        </select>
+        <p v-if="selectedCity" class="selected-city-display">
+          当前选择: <strong>{{ selectedCity }}</strong>
+        </p>
+      </div>
+    </div>
+
+    <hr class="separator"/>
+
     <div class="home-location-section">
       <h3>Manage Home Location</h3>
       <div v-if="currentHomeLocation && currentHomeLocation.address" class="current-home-display">
@@ -16,9 +44,30 @@
         No home location set.
       </div>
       <form @submit.prevent="saveHomeLocation" class="home-form">
-        <div class="form-group">
+        <div class="form-group address-input-container">
           <label for="homeAddress">Home Address:</label>
-          <input type="text" id="homeAddress" v-model="homeAddressInput" placeholder="Enter your home address" />
+          <input 
+            type="text" 
+            id="homeAddress" 
+            v-model="homeAddressInput" 
+            @input="onAddressInput"
+            @focus="showAddressSuggestions = true"
+            @blur="hideAddressSuggestions"
+            placeholder="Enter your home address" 
+            autocomplete="off"
+          />
+          <!-- 地址建议下拉框 -->
+          <div v-if="showAddressSuggestions && addressSuggestions.length > 0" class="address-suggestions">
+            <div 
+              v-for="suggestion in addressSuggestions" 
+              :key="suggestion.id"
+              @mousedown="selectAddressSuggestion(suggestion)"
+              class="suggestion-item"
+            >
+              <div class="suggestion-name">{{ suggestion.name }}</div>
+              <div class="suggestion-address">{{ suggestion.address }}</div>
+            </div>
+          </div>
         </div>
         <div class="form-group">
           <label for="homeLatitude">Latitude (Optional):</label>
@@ -40,9 +89,31 @@
     <div class="shops-to-visit-section">
       <h3>Shops to Visit</h3>
       <form @submit.prevent="addShop" class="add-shop-form">
-        <div class="form-group">
+        <div class="form-group shop-input-container">
           <label for="shopInput">Shop Name:</label>
-          <input type="text" id="shopInput" v-model="shopInput" placeholder="Enter a shop name" />
+          <input 
+            type="text" 
+            id="shopInput" 
+            v-model="shopInput" 
+            @input="onShopInput"
+            @focus="showShopSuggestions = true"
+            @blur="hideShopSuggestions"
+            placeholder="Enter a shop name" 
+            autocomplete="off"
+          />
+          <!-- 店铺建议下拉框 -->
+          <div v-if="showShopSuggestions && shopSuggestions.length > 0" class="shop-suggestions">
+            <div 
+              v-for="suggestion in shopSuggestions" 
+              :key="suggestion.id"
+              @mousedown="selectShopSuggestion(suggestion)"
+              class="suggestion-item"
+            >
+              <div class="suggestion-name">{{ suggestion.name }}</div>
+              <div class="suggestion-address">{{ suggestion.address }}</div>
+              <div class="suggestion-distance" v-if="suggestion.distance">{{ Math.round(suggestion.distance) }}m</div>
+            </div>
+          </div>
         </div>
         <button type="submit" class="btn-primary">Add Shop</button>
       </form>
@@ -118,7 +189,7 @@
 
       <div v-if="selectedTravelMode === 'public_transit'" class="form-group">
         <label for="homeCityName">Origin City for Transit (e.g., "Beijing" or city code):</label>
-        <input type="text" id="homeCityName" v-model="homeCityName" placeholder="Enter city for transit" />
+        <input type="text" id="homeCityName" v-model="homeCityName" :placeholder="selectedCity || '请输入城市名'" />
         <small v-if="!homeCityName" class="text-danger">City is required for public transit mode.</small>
       </div>
 
@@ -240,6 +311,13 @@ export default {
       // Schedule Display
       defaultStartTime: '09:00:00', // e.g., 9 AM
       displayableSchedule: null, // Array of schedule items
+
+      // New properties for address suggestions
+      showAddressSuggestions: false,
+      addressSuggestions: [],
+      showShopSuggestions: false,
+      shopSuggestions: [],
+      selectedCity: '',
     };
   },
   computed: {
@@ -334,17 +412,23 @@ export default {
     // Methods for Shops to Visit
     addShop() {
       if (this.shopInput.trim() !== '') {
+        // 如果有建议且输入框内容与第一个建议匹配，直接选择
+        if (this.shopSuggestions.length > 0) {
+          const firstSuggestion = this.shopSuggestions[0];
+          if (firstSuggestion.name.toLowerCase().includes(this.shopInput.toLowerCase())) {
+            this.selectShopSuggestion(firstSuggestion);
+            return;
+          }
+        }
+        
+        // 否则按原来的方式添加（需要后续搜索确认）
         this.shopsToVisit.push({
-          id: Date.now(), // Simple unique ID
+          id: Date.now(),
           name: this.shopInput.trim(),
-          // address: null, // Future enhancement
-          // latitude: null, // Future enhancement
-          // longitude: null, // Future enhancement
-          // status: 'pending' // Future enhancement (e.g., pending, found, not_found)
         });
-        this.shopInput = ''; // Clear input
+        this.shopInput = '';
       } else {
-        alert('Please enter a shop name.');
+        alert('请输入店铺名称。');
       }
     },
     removeShop(shopId) {
@@ -583,7 +667,107 @@ export default {
       if (totalSeconds === undefined || totalSeconds === null || totalSeconds < 0) return 'N/A';
       const minutes = Math.round(totalSeconds / 60);
       return `${minutes}`; // Template will add " min"
-    }
+    },
+    async onAddressInput() {
+      if (this.homeAddressInput.trim().length < 2) {
+        this.addressSuggestions = [];
+        return;
+      }
+      
+      try {
+        const payload = {
+          keywords: this.homeAddressInput.trim(),
+        };
+        
+        if (this.selectedCity) {
+          payload.city = this.selectedCity;
+        }
+        
+        const response = await axios.post('/api/shops/find', payload);
+        if (response.data.shops && response.data.shops.length > 0) {
+          this.addressSuggestions = response.data.shops.slice(0, 5); // 限制显示5个建议
+        } else {
+          this.addressSuggestions = [];
+        }
+      } catch (error) {
+        console.error('Error fetching address suggestions:', error);
+        this.addressSuggestions = [];
+      }
+    },
+    hideAddressSuggestions() {
+      setTimeout(() => {
+        this.showAddressSuggestions = false;
+      }, 200); // 延迟隐藏，让点击事件先执行
+    },
+    selectAddressSuggestion(suggestion) {
+      this.homeAddressInput = suggestion.address || suggestion.name;
+      this.homeLatitudeInput = suggestion.latitude ? suggestion.latitude.toString() : '';
+      this.homeLongitudeInput = suggestion.longitude ? suggestion.longitude.toString() : '';
+      this.showAddressSuggestions = false;
+      this.addressSuggestions = [];
+    },
+    async onShopInput() {
+      if (this.shopInput.trim().length < 2) {
+        this.shopSuggestions = [];
+        return;
+      }
+      
+      try {
+        const payload = {
+          keywords: this.shopInput.trim(),
+        };
+        
+        if (this.selectedCity) {
+          payload.city = this.selectedCity;
+        }
+        
+        if (this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude) {
+          payload.latitude = this.currentHomeLocation.latitude;
+          payload.longitude = this.currentHomeLocation.longitude;
+          payload.radius = 20000; // 20公里范围内搜索
+        }
+        
+        const response = await axios.post('/api/shops/find', payload);
+        if (response.data.shops && response.data.shops.length > 0) {
+          this.shopSuggestions = response.data.shops.slice(0, 8); // 限制显示8个建议
+        } else {
+          this.shopSuggestions = [];
+        }
+      } catch (error) {
+        console.error('Error fetching shop suggestions:', error);
+        this.shopSuggestions = [];
+      }
+    },
+    hideShopSuggestions() {
+      setTimeout(() => {
+        this.showShopSuggestions = false;
+      }, 200); // 延迟隐藏，让点击事件先执行
+    },
+    selectShopSuggestion(suggestion) {
+      // 直接添加选中的店铺到列表
+      const newShop = {
+        id: Date.now(),
+        name: suggestion.name,
+        address: suggestion.address,
+        latitude: suggestion.latitude,
+        longitude: suggestion.longitude,
+        status: 'confirmed',
+        amap_id: suggestion.id,
+        stayDurationMinutes: 30 // 默认停留30分钟
+      };
+      
+      this.shopsToVisit.push(newShop);
+      this.shopInput = ''; // 清空输入框
+      this.showShopSuggestions = false;
+      this.shopSuggestions = [];
+      
+      alert(`店铺 "${newShop.name}" 已添加到您的探店列表！`);
+    },
+    onCityChange() {
+      if (this.selectedCity && this.selectedTravelMode === 'public_transit') {
+        this.homeCityName = this.selectedCity;
+      }
+    },
   },
   mounted() {
     this.fetchHomeLocation();
@@ -1003,6 +1187,113 @@ input[type="text"] { /* More general styling for text inputs */
 .departure-event .event-description strong,
 .arrival-event .event-description strong {
   color: #007bff; /* Primary blue for location names */
+}
+
+/* New styles for city selection */
+.city-selection-section {
+  background-color: #fff;
+  padding: 20px;
+  border-radius: 6px;
+  margin-bottom: 25px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+.city-selection-section h3 {
+  margin-top: 0;
+  margin-bottom: 15px;
+}
+.city-select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+.selected-city-display {
+  margin-top: 10px;
+  padding: 10px;
+  background-color: #eef7ff;
+  border: 1px solid #cce0ff;
+  border-radius: 4px;
+  font-style: italic;
+}
+
+/* New styles for address suggestions */
+.address-input-container, .shop-input-container {
+  position: relative;
+}
+
+.address-suggestions, .shop-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background-color: #fff;
+  border: 1px solid #ccc;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 1000;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.suggestion-item {
+  padding: 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f0f0;
+  transition: background-color 0.2s;
+}
+
+.suggestion-item:hover {
+  background-color: #f8f9fa;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.suggestion-name {
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 2px;
+}
+
+.suggestion-address {
+  color: #666;
+  font-size: 0.9em;
+}
+
+.suggestion-distance {
+  font-size: 0.8em;
+  color: #888;
+  margin-top: 2px;
+}
+
+/* New styles for shop suggestions */
+.shop-suggestions {
+  position: absolute;
+  background-color: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 1000;
+}
+.shop-suggestions .suggestion-item {
+  padding: 10px;
+  cursor: pointer;
+}
+.shop-suggestions .suggestion-item:hover {
+  background-color: #f0f0f0;
+}
+.shop-suggestions .suggestion-name {
+  font-weight: bold;
+}
+.shop-suggestions .suggestion-address {
+  color: #555;
+}
+.shop-suggestions .suggestion-distance {
+  font-size: 0.8em;
+  color: #777;
 }
 
 </style>

@@ -3,20 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Travel Planner</title>
-    <!-- Vue.js and Vue Router will be included via CDN for simplicity in this manual setup -->
+    <title>智能商店寻路助手</title>
+    <!-- Vue.js and Vue Router (Global Build) -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.js"></script>
-    <!-- Axios for API calls -->
+    <!-- Axios (Global Build) -->
     <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
     <!-- Gaode Maps API -->
-    <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key=68778fb7fc7baf898edd94a8fc683768&plugin=AMap.ToolBar,AMap.Scale,AMap.Geocoder,AMap.Driving"></script>
-    <link rel="stylesheet" href="style.css"> <!-- Optional: for basic styling -->
+    <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key=68778fb7fc7baf898edd94a8fc683768"></script>
+    <!-- Link to stylesheet -->
+    <link rel="stylesheet" href="src/style.css">
 </head>
 <body>
     <div id="app">
         <!-- Vue app will be mounted here -->
     </div>
-    <script type="module" src="src/main.js"></script>
+    <!-- Load main.js as a classic script, not a module -->
+    <script src="src/main.js"></script>
 </body>
 </html>
