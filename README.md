@@ -8,16 +8,12 @@
     *   注册 (Register)
     *   登录 (Login)
     *   登出 (Logout)
-*   **行程管理 (Trip Management):**
-    *   创建行程 (Create Trip)
-    *   查看行程 (View Trips)
 *   **用户住址管理 (User Home Address Management):**
     *   设置和查看用户住址 (Set and view user home address)
 *   **店铺搜索 (Shop Search):**
     *   通过关键词、位置、城市搜索店铺 (Search shops by keywords, location, city)
-*   **路线优化 (Route Optimization):**
-    *   计算从家到多个店铺的最优路线 (Calculate optimal route from home to multiple shops)
-    *   支持驾车和公交两种模式 (Supports driving and public transit modes)
+*   **路线规划 (Route Planning):**
+    *   规划从家出发，按顺序访问多个店铺，并返回家中的驾车路线。也支持基础的公交路线查询（当前版本主要支持点对点查询，多点连续公交行程规划能力有限）。
 *   **高德地图API集成 (Amap API Integration):**
     *   用于地理编码、POI搜索、路线规划 (Used for geocoding, POI search, route planning)
 
@@ -51,7 +47,18 @@
 
 3.  **访问应用:**
     *   前端应用: `http://localhost:8080` (具体端口请查看 `docker-compose.yml` 中 `frontend` 服务的端口映射)
-    *   后端API: `http://localhost:5000` (具体端口请查看 `docker-compose.yml` 中 `backend` 服务的端口映射)
+    *   后端API: `http://localhost:5001` (具体端口请查看 `docker-compose.yml` 中 `backend` 服务的端口映射)
+
+## 关于当前版本
+
+本项目通过 Docker 运行的版本提供了一套核心的门店发现和路线规划功能。前端界面基于 `frontend/src/main.js` 文件中的 Vue 组件定义，实现了基础的用户交互。
+
+代码库中 `frontend/src/components/` 目录下包含了更为完整和功能丰富的 Vue 单文件组件（SFCs），这些组件设计用于实现更高级的功能，例如：
+*   全自动的最优路线计算（TSP优化，区分最短距离和最快时间）。
+*   详细的行程时间安排表。
+*   更完善的店铺搜索与筛选界面。
+
+这些高级组件需要Vue的构建工具链（如 Vue CLI 或 Vite）进行编译和打包才能在生产环境中使用。当前默认的 Docker 配置直接使用 Nginx 托管基于 `main.js` 的简化版前端，未包含此构建步骤。若您希望体验或开发这些高级功能，请自行配置Vue的开发和构建环境。
 
 ## 注意事项
 *   首次启动后端服务时，会自动在 `backend` 目录下创建 `travel_planner.db` SQLite数据库文件。
