@@ -228,108 +228,52 @@ const MapDisplayComp = {
     };
   },
   mounted() {
-    // 避免可能的错误，提供一个更简单可靠的地图初始化流程
-    setTimeout(() => {
-      try {
+    if (window.AMap) {
+      this.initMap();
+    } else {
+      console.error("Gaode Maps API not loaded for MapDisplayComp. Ensure the script tag is in index.html and the key is valid.");
+      // Poll for AMap availability
+      let attempts = 0;
+      const interval = setInterval(() => {
+        attempts++;
         if (window.AMap) {
           this.initMap();
-        } else {
-          console.log("高德地图API未加载，使用模拟地图代替");
-          this.initFallbackMap();
+          clearInterval(interval);
+        } else if (attempts > 10) { // Try for a few seconds
+          clearInterval(interval);
+          console.error("Gaode Maps API failed to load after multiple attempts.");
+          this.$parent.showNotification('地图服务加载失败，请检查网络连接', 'error');
         }
-      } catch (error) {
-        console.log("地图初始化出错，使用模拟地图代替", error);
-        this.initFallbackMap();
-      }
-      
-      // 无论如何，通知父组件地图已初始化
-      setTimeout(() => {
-        this.$emit('map-initialized', true);
       }, 500);
-    }, 1000);
+    }
   },
   methods: {
     async initMap() {
       try {
-        // 创建一个简单的地图实例
+        // 确保地图插件已加载
+        await new Promise((resolve, reject) => {
+          AMap.plugin(['AMap.Geocoder', 'AMap.Driving', 'AMap.Transfer', 'AMap.Scale', 'AMap.ToolBar'], () => {
+            resolve();
+          });
+        });
+
+        // 初始化地图
         this.map = new AMap.Map('map-container-js', {
           zoom: 11,
-          center: [118.7815, 32.0506], // 南京
+          center: [116.397428, 39.90923], // Default to Beijing
           resizeEnable: true,
         });
-        
-        console.log('地图初始化成功');
+
+        // 添加地图控件
+        this.map.addControl(new AMap.Scale());
+        this.map.addControl(new AMap.ToolBar());
+        console.log('MapDisplayComp: Map controls added successfully');
         
         // 通知父组件地图已初始化完成
         this.$emit('map-initialized', true);
       } catch (error) {
-        console.log('标准地图初始化失败，使用备用方案:', error);
-        this.initFallbackMap();
-      }
-    },
-    
-    // 模拟地图初始化，当AMap不可用时使用
-    initFallbackMap() {
-      try {
-        // 创建一个模拟的地图API，提供基本功能
-        const mapContainer = document.getElementById('map-container-js');
-        if (mapContainer) {
-          // 创建简单HTML内容显示模拟地图
-          mapContainer.innerHTML = `
-            <div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#f0f2f5;">
-              <div style="font-size:18px;margin-bottom:10px;">地图模拟模式</div>
-              <div style="font-size:14px;color:#666;margin-bottom:20px;">高德地图API暂不可用，使用模拟数据</div>
-              <div style="background:#fff;padding:15px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1);max-width:80%;">
-                <div style="font-weight:bold;margin-bottom:10px;">南京市</div>
-                <div style="color:#666;font-size:13px;">坐标: 118.78, 32.05</div>
-              </div>
-            </div>
-          `;
-        }
-        
-        // 创建模拟的地图API对象
-        this.map = {
-          // 基本方法模拟
-          add: () => console.log('模拟地图: 添加对象'),
-          remove: () => console.log('模拟地图: 移除对象'),
-          setCenter: () => console.log('模拟地图: 设置中心点'),
-          setZoom: () => console.log('模拟地图: 设置缩放级别'),
-          setFitView: () => console.log('模拟地图: 设置视图'),
-          addControl: () => console.log('模拟地图: 添加控件'),
-          // 其他必要方法...
-        };
-        
-        // 创建模拟的地理坐标对象
-        if (!window.AMap) {
-          window.AMap = {
-            LngLat: function(lng, lat) {
-              this.lng = lng;
-              this.lat = lat;
-              this.getLng = function() { return this.lng; };
-              this.getLat = function() { return this.lat; };
-            },
-            Marker: function(options) {
-              this.position = options.position;
-              this.title = options.title;
-              this.shopInfo = null;
-              this.getPosition = function() { return this.position; };
-            },
-            GeometryUtil: {
-              distance: function(p1, p2) {
-                // 简单计算两点间距离
-                const dx = (p1.lng || p1.getLng()) - (p2.lng || p2.getLng());
-                const dy = (p1.lat || p1.getLat()) - (p2.lat || p2.getLat());
-                return Math.sqrt(dx * dx + dy * dy) * 111000; // 粗略换算成米
-              }
-            }
-          };
-        }
-        
-        // 通知初始化完成
-        this.$emit('map-initialized', true);
-        console.log('模拟地图初始化完成');
-      } catch (error) {
-        console.error('模拟地图初始化失败:', error);
+        console.error('MapDisplayComp: Error initializing map:', error);
+        this.$parent.showNotification('地图初始化失败，请刷新页面重试', 'error');
       }
     },
 
@@ -1362,51 +1306,29 @@ const Dashboard = {
       this.selectedCity = savedCity;
     }
     
-    // 避免在插件未加载时出现过多警告
-    this.pluginsReady = true; // 直接标记为已准备好，避免过多警告
-    
-    // 简化插件初始化，使用可靠性更高的方式
+    // 确保在组件挂载后延迟初始化插件，避免竞态条件
     setTimeout(() => {
-      try {
-        if (window.AMap) {
-          // 创建替代对象，避免出错
-          this.autoComplete = {
-            search: (keyword, callback) => {
-              // 模拟结果
-              const mockResult = {
-                tips: [
-                  {
-                    id: "mock1",
-                    name: keyword + " 小区",
-                    district: "江苏省南京市建邺区",
-                    location: {
-                      lng: 118.6615 + Math.random() * 0.02 - 0.01,
-                      lat: 32.0806 + Math.random() * 0.02 - 0.01
-                    }
-                  },
-                  {
-                    id: "mock2",
-                    name: keyword + " 广场",
-                    district: "江苏省南京市秦淮区",
-                    location: {
-                      lng: 118.7815 + Math.random() * 0.02 - 0.01,
-                      lat: 32.0506 + Math.random() * 0.02 - 0.01
-                    }
-                  }
-                ]
-              };
-              callback("complete", mockResult);
-            }
-          };
-          
-          console.log('使用模拟插件功能替代实际API调用，避免过多警告');
-        } else {
-          console.warn('高德地图API未找到，将使用模拟数据');
+      // Initialize AMap plugins
+      AMap.plugin(['AMap.AutoComplete', 'AMap.PlaceSearch', 'AMap.Geocoder'], () => {
+        try {
+          this.autoComplete = new AMap.AutoComplete({
+            city: this.selectedCity || '全国'
+          });
+          this.placeSearch = new AMap.PlaceSearch({
+            city: this.selectedCity || '全国',
+            pageSize: 10,
+            pageIndex: 1
+          });
+          this.geocoder = new AMap.Geocoder({
+            city: this.selectedCity || '全国'
+          });
+          this.pluginsReady = true; // 标记插件已准备好
+          console.log('AMap plugins loaded and initialized successfully.');
+        } catch (error) {
+          console.error('Error initializing AMap plugins:', error);
         }
-      } catch (error) {
-        console.error('初始化模拟插件时出错:', error);
-      }
-    }, 500);
+      });
+    }, 1500);
     
     // 延迟加载家庭位置，确保地图组件已完全初始化
     this.$nextTick(() => {
@@ -1520,6 +1442,11 @@ const Dashboard = {
     },
     
     onAddressInput() {
+      if (!this.pluginsReady || !this.autoComplete) {
+        console.warn('AutoComplete plugin not ready yet.');
+        return;
+      }
+
       if (!this.homeAddress || this.homeAddress.trim().length < 2) {
         this.addressSuggestions = [];
         this.showAddressSuggestions = false;
@@ -1527,39 +1454,22 @@ const Dashboard = {
       }
 
       try {
-        // 使用延迟执行，提高用户体验
+        // 使用延迟执行，确保插件已完全初始化
         setTimeout(() => {
-          try {
-            // 使用模拟地址数据
-            const mockAddresses = [
-              {
-                id: "mock1",
-                name: this.homeAddress + "小区",
-                district: "江苏省南京市建邺区",
-                location: {
-                  lng: 118.6615 + Math.random() * 0.02 - 0.01,
-                  lat: 32.0806 + Math.random() * 0.02 - 0.01
-                }
-              },
-              {
-                id: "mock2",
-                name: this.homeAddress + "广场",
-                district: "江苏省南京市秦淮区",
-                location: {
-                  lng: 118.7815 + Math.random() * 0.02 - 0.01,
-                  lat: 32.0506 + Math.random() * 0.02 - 0.01
-                }
+          if (this.autoComplete && typeof this.autoComplete.search === 'function') {
+            this.autoComplete.search(this.homeAddress, (status, result) => {
+              if (status === 'complete' && result.tips) {
+                this.addressSuggestions = result.tips.filter(tip => tip.location);
+                this.showAddressSuggestions = true;
+              } else {
+                this.addressSuggestions = [];
+                this.showAddressSuggestions = false;
               }
-            ];
-            
-            this.addressSuggestions = mockAddresses;
-            this.showAddressSuggestions = true;
-          } catch (error) {
-            console.error('处理模拟地址数据时出错:', error);
-            this.addressSuggestions = [];
-            this.showAddressSuggestions = false;
+            });
+          } else {
+            console.warn('AutoComplete 插件未正确初始化');
           }
-        }, 300);
+        }, 500);
       } catch (error) {
         console.error('地址提示搜索错误:', error);
         this.addressSuggestions = [];
@@ -1576,47 +1486,15 @@ const Dashboard = {
     selectAddressSuggestion(suggestion) {
       this.homeAddress = suggestion.name;
       this.showAddressSuggestions = false;
-      
-      // 直接使用建议的位置信息，无需再次地理编码
-      if (suggestion.location) {
-        const location = {
-          longitude: suggestion.location.lng,
-          latitude: suggestion.location.lat,
-          address: suggestion.name
-        };
-        
-        // 更新当前位置
-        this.currentHomeLocation = location;
-        this.homeLocation = location;
-        
-        // 在地图上设置标记
-        if (this.$refs.mapDisplayRef) {
-          this.$refs.mapDisplayRef.setHomeLocation(
-            location.longitude,
-            location.latitude,
-            location.address
-          );
-        }
-        
-        // 保存到本地存储
-        localStorage.setItem('homeLocation', JSON.stringify({
-          address: suggestion.name,
-          location: location
-        }));
-        
-        this.showNotification('家庭地址已更新', 'success');
-      } else {
-        this.$refs.mapDisplayRef.geocodeAddressAndSetHome(this.homeAddress);
-      }
+      this.$refs.mapDisplayRef.geocodeAddressAndSetHome(this.homeAddress);
     },
     
     // 店铺输入自动完成 - 重新设计的正确逻辑
     async onShopInput() {
-      // 不检查插件是否准备好，减少警告日志
-      // if (!this.pluginsReady) {
-      //   console.warn('PlaceSearch plugin not ready yet.');
-      //   return;
-      // }
+      if (!this.pluginsReady) {
+        console.warn('PlaceSearch plugin not ready yet.');
+        return;
+      }
 
       if (this.shopInput.trim().length < 2) {
         this.shopSuggestions = [];
@@ -1635,44 +1513,19 @@ const Dashboard = {
           searchOptions.radius = 20000;
         }
 
-        // 使用模拟数据而不是调用API，避免插件问题
+        // 使用延迟执行，确保插件已完全初始化
         setTimeout(() => {
-          try {
-            // 创建模拟数据
-            const mockResult = {
-              status: 'complete',
-              result: {
-                poiList: {
-                  pois: [
-                    {
-                      id: 'mock1',
-                      name: this.shopInput + '(示例店铺)',
-                      address: '南京市建邺区兴隆大街' + Math.floor(Math.random() * 100) + '号',
-                      location: { 
-                        lng: 118.6615 + Math.random() * 0.02 - 0.01,
-                        lat: 32.0806 + Math.random() * 0.02 - 0.01
-                      },
-                      distance: Math.floor(Math.random() * 5000)
-                    },
-                    {
-                      id: 'mock2',
-                      name: this.shopInput + '(南京中心店)',
-                      address: '南京市鼓楼区中山北路' + Math.floor(Math.random() * 100) + '号',
-                      location: {
-                        lng: 118.7815 + Math.random() * 0.02 - 0.01,
-                        lat: 32.0506 + Math.random() * 0.02 - 0.01
-                      },
-                      distance: Math.floor(Math.random() * 5000) + 5000
-                    }
-                  ]
-                }
-              }
-            };
-            
-            // 使用模拟数据处理，跳过实际API调用
-            const status = mockResult.status;
-            const result = mockResult.result;
-            
+          if (!this.placeSearch) {
+            console.warn('PlaceSearch 插件未初始化');
+            return;
+          }
+          
+          if (typeof this.placeSearch.search !== 'function') {
+            console.warn('PlaceSearch.search 不是一个函数');
+            return;
+          }
+          
+          this.placeSearch.search(searchOptions, (status, result) => {
             if (status === 'complete' && result.poiList && result.poiList.pois) {
               const pois = result.poiList.pois;
               
@@ -1711,11 +1564,8 @@ const Dashboard = {
               this.showShopSuggestions = false;
               this.showNotification(`未找到"${this.shopInput}"相关店铺，请尝试其他关键词`, 'warning');
             }
-          } catch (error) {
-            console.error('处理模拟数据时出错:', error);
-            this.showNotification('搜索过程中出错，请重试', 'error');
-          }
-        }, 300);
+          });
+        }, 1000);
       } catch (error) {
         console.error('店铺搜索错误:', error);
         this.showNotification('店铺搜索出错，请重试', 'error');

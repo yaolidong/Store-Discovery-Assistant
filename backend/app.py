@@ -89,7 +89,7 @@ def geocode_address(api_key, address, city=None):
         return None
     return None
 
-def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=None):
+def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=None, max_results=50):
     """
     Searches for POIs using Amap Place Text Search API.
     Returns a list of POI dictionaries or None.
@@ -116,6 +116,31 @@ def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=N
         response = requests.get(url, params=params, timeout=5)
         response.raise_for_status()
         data = response.json()
+
+        all_pois = []
+        page = 1
+        offset = 25
+        
+        while len(all_pois) < max_results:
+            params = {
+                "key": api_key,
+                "keywords": keywords,
+                "offset": offset,
+                "page": page,
+            }
+            if data.get("status") == "1" and data.get("pois"):
+                current_pois = data["pois"]
+                all_pois.extend(current_pois)
+                
+                # 如果返回的结果少于offset，说明没有更多数据了
+                if len(current_pois) < offset:
+                    break
+                    
+                page += 1
+            else:
+                break
+        
+        return all_pois[:max_results]  # 限制最终返回数量
 
         if data.get("status") == "1" and data.get("pois"):
             pois_data = []
