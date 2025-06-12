@@ -13,7 +13,7 @@
 *   **店铺搜索 (Shop Search):**
     *   通过关键词、位置、城市搜索店铺 (Search shops by keywords, location, city)
 *   **路线规划 (Route Planning):**
-    *   规划从家出发，按顺序访问多个店铺，并返回家中的驾车路线。也支持基础的公交路线查询（当前版本主要支持点对点查询，多点连续公交行程规划能力有限）。
+    *   规划从家出发，通过优化店铺的访问顺序，访问多个店铺并返回家中的最优驾车或公交路线。系统会尝试计算最短总距离或最少总时间的路线。也支持基础的公交路线查询（当前版本主要支持点对点查询，多点连续公交行程规划能力有限）。
 *   **高德地图API集成 (Amap API Integration):**
     *   用于地理编码、POI搜索、路线规划 (Used for geocoding, POI search, route planning)
 
