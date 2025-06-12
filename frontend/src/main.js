@@ -1192,14 +1192,23 @@ const Dashboard = {
           
           // 在地图上显示家的位置
           this.$nextTick(() => {
-            const mapDisplay = this.$refs.mapDisplayRef;
-            if (mapDisplay && this.homeLocation) {
-              mapDisplay.setHomeLocation(
-                this.homeLocation.longitude, 
-                this.homeLocation.latitude, 
-                this.homeAddress
-              );
-            }
+            // Ensure map is ready before trying to set home location
+            const checkMapReady = () => {
+              const mapDisplay = this.$refs.mapDisplayRef;
+              if (mapDisplay && mapDisplay.map) { // Check if map object exists
+                if (this.homeLocation) {
+                  mapDisplay.setHomeLocation(
+                    this.homeLocation.longitude,
+                    this.homeLocation.latitude,
+                    this.homeAddress
+                  );
+                }
+              } else {
+                // If map not ready, try again shortly
+                setTimeout(checkMapReady, 200);
+              }
+            };
+            checkMapReady();
           });
           
           console.log('已加载保存的家地址:', this.homeAddress);
@@ -1207,6 +1216,26 @@ const Dashboard = {
           console.error('加载家地址失败:', error);
           localStorage.removeItem('homeLocation');
         }
+      }
+    },
+
+    // This is the target method to change
+    setHomeLocationOnMap() {
+      const mapDisplay = this.$refs.mapDisplayRef;
+      if (mapDisplay) {
+        if (!this.homeAddress || this.homeAddress.trim() === '') {
+          this.showNotification('请输入有效的家庭地址', 'warning');
+          return;
+        }
+        mapDisplay.geocodeAddressAndSetHome(this.homeAddress, (loc) => {
+          if (loc) {
+            this.homeLocation = loc;
+            this.saveHomeLocation(); // Save after successful geocoding
+          }
+          // Notification of success/failure is handled by geocodeAddressAndSetHome
+        });
+      } else {
+        this.showNotification('地图组件不可用', 'error');
       }
     },
     
@@ -1915,7 +1944,9 @@ const Dashboard = {
     async onAddressInput() {
       if (this.homeAddress.trim().length < 2) {
         this.addressSuggestions = [];
-          return;
+        // Also call setHomeLocationOnMap to validate or clear if address becomes empty
+        this.setHomeLocationOnMap();
+        return;
       }
 
       try {
@@ -1937,6 +1968,8 @@ const Dashboard = {
         console.error('Error fetching address suggestions:', error);
         this.addressSuggestions = [];
       }
+      // Call setHomeLocationOnMap after suggestions are fetched or input changes
+      this.setHomeLocationOnMap();
     },
     
     hideAddressSuggestions() {
@@ -1947,22 +1980,12 @@ const Dashboard = {
     
     selectAddressSuggestion(suggestion) {
       this.homeAddress = suggestion.address || suggestion.name;
-      this.homeLocation = {
-        longitude: suggestion.longitude,
-        latitude: suggestion.latitude,
-        address: suggestion.address || suggestion.name
-      };
+      // this.homeLocation is set by setHomeLocationOnMap
       this.showAddressSuggestions = false;
       this.addressSuggestions = [];
       
-      // 保存家的位置到本地存储
-      this.saveHomeLocation();
-      
-      // 在地图上显示家的位置
-      const mapDisplay = this.$refs.mapDisplayRef;
-      if (mapDisplay && suggestion.latitude && suggestion.longitude) {
-        mapDisplay.setHomeLocation(suggestion.longitude, suggestion.latitude, this.homeAddress);
-      }
+      // Trigger map update and saving
+      this.setHomeLocationOnMap();
     },
     
     // 店铺输入自动完成 - 重新设计的正确逻辑
