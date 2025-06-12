@@ -565,6 +565,7 @@ def optimize_route():
     shops_data = data.get('shops')
     mode = data.get('mode', 'driving')
     city_param = data.get('city') # City name or adcode, used for public transit
+    preferred_shop_ids = data.get('preferred_shop_ids', []) # Added
 
     if not home_location_data or 'latitude' not in home_location_data or 'longitude' not in home_location_data:
         return jsonify({'message': 'Missing or invalid "home_location". It must be an object with "latitude" and "longitude".'}), 400
@@ -764,6 +765,26 @@ def optimize_route():
             'total_overall_duration': overall_total_duration_time,
             'route_segments': route_segments_details_time
         }
+
+    # Filter routes based on preferred_shop_ids
+    if preferred_shop_ids:
+        preferred_shop_ids_set = set(str(shop_id) for shop_id in preferred_shop_ids) # Convert to set of strings
+
+        # Filter shortest_distance_route_data
+        if shortest_distance_route_data:
+            route_shop_ids_distance = set(
+                str(shop['id']) for shop in shortest_distance_route_data['optimized_order'] if str(shop['id']) != 'home'
+            )
+            if not preferred_shop_ids_set.issubset(route_shop_ids_distance):
+                shortest_distance_route_data = None
+
+        # Filter fastest_travel_time_route_data
+        if fastest_travel_time_route_data:
+            route_shop_ids_time = set(
+                str(shop['id']) for shop in fastest_travel_time_route_data['optimized_order'] if str(shop['id']) != 'home'
+            )
+            if not preferred_shop_ids_set.issubset(route_shop_ids_time):
+                fastest_travel_time_route_data = None
 
     return jsonify({
         "routes": {
