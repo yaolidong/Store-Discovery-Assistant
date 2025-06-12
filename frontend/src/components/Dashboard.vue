@@ -136,6 +136,15 @@
                 class="stay-duration-input"
               />
             </div>
+            <!-- Preferred Shop Checkbox -->
+            <div v-if="shop.status === 'confirmed'" class="shop-preferred-checkbox">
+              <input
+                type="checkbox"
+                :id="'isPreferred-' + shop.id"
+                v-model="shop.isPreferred"
+              />
+              <label :for="'isPreferred-' + shop.id">Preferred</label>
+            </div>
           </div>
           <div class="shop-item-actions">
             <button
@@ -545,7 +554,8 @@ export default {
           longitude: selectedCandidate.longitude,
           status: 'confirmed',
           amap_id: selectedCandidate.id, // Store Amap POI ID if needed
-          stayDurationMinutes: 0 // Initialize stay duration
+          stayDurationMinutes: 0, // Initialize stay duration
+          isPreferred: this.shopsToVisit[shopIndex]?.isPreferred || false // Retain or initialize isPreferred
         };
         this.shopsToVisit.splice(shopIndex, 1, updatedShop); // Replace item reactively
 
@@ -605,6 +615,13 @@ export default {
         shops: confirmedShops,
         // mode: "driving" // Default in backend, can be added if mode selection is implemented
       };
+
+      // Add preferred_shop_ids to the payload
+      const preferred_shop_ids = this.shopsToVisit
+        .filter(shop => shop.status === 'confirmed' && shop.isPreferred)
+        .map(shop => shop.id); // Assuming shop.id is the correct ID to send
+
+      payload.preferred_shop_ids = preferred_shop_ids;
 
       // Add mode and city if public transit
       payload.mode = this.selectedTravelMode;
@@ -814,7 +831,8 @@ export default {
         longitude: suggestion.longitude,
         status: 'confirmed',
         amap_id: suggestion.id,
-        stayDurationMinutes: 30 // 默认停留30分钟
+        stayDurationMinutes: 30, // 默认停留30分钟
+        isPreferred: false // Initialize isPreferred for newly added shops
       };
       
       this.shopsToVisit.push(newShop);
@@ -1043,6 +1061,19 @@ export default {
   display: flex;
   align-items: center;
   margin-top: 5px; /* Space above the stay duration input */
+}
+.shop-preferred-checkbox {
+  margin-top: 8px; /* Space above the checkbox */
+  display: flex;
+  align-items: center;
+}
+.shop-preferred-checkbox input[type="checkbox"] {
+  margin-right: 5px;
+}
+.shop-preferred-checkbox label {
+  font-size: 0.9em;
+  color: #333;
+  font-weight: normal; /* Override potential bold from general label styles if any */
 }
 .stay-duration-label {
   font-size: 0.85em;
