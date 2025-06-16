@@ -295,9 +295,13 @@
 
     <hr class="separator"/>
 
+    <div v-if="(routesByTime.length > 0 || routesByDistance.length > 0) && (!displayableSchedule || displayableSchedule.length === 0)" class="placeholder-message-section">
+      <p>请从上方列表中选择一条路线以查看详细行程及地图。</p>
+    </div>
+
     <!-- Generated Schedule Display -->
     <div v-if="displayableSchedule && displayableSchedule.length > 0" class="schedule-display-section">
-      <h3>Generated Schedule (Starts at {{ formatTime(new Date(new Date().setHours(...defaultStartTime.split(':').map(Number)))) }})</h3>
+      <h3>Generated Schedule (Starts at {{ formatTime(new Date(new Date().setHours(...departureTime.split(':').map(Number)))) }})</h3>
       <ul class="schedule-list">
         <li v-for="(item, index) in displayableSchedule" :key="index" class="schedule-item">
           <div v-if="item.type === 'departure'" class="schedule-event departure-event">
@@ -583,21 +587,22 @@ export default {
           });
 
           // Force Vue to re-render the component.
-          this.$forceUpdate();
+          this.$forceUpdate(); // Keep this if it's helping with reactivity for the candidate lists
 
-          // Set a default selection if routes are found
-          if (this.routesByTime.length > 0) {
-            console.log("Defaulting to first TIME-optimized route.");
-            this.selectRoute(this.routesByTime[0]);
-          } else if (this.routesByDistance.length > 0) {
-            console.log("Defaulting to first DISTANCE-optimized route.");
-            this.selectRoute(this.routesByDistance[0]);
-          } else {
-            alert("No valid routes found.");
+          // Ensure no default selection is made here.
+          // The user will now need to click a candidate to see details.
+          if (timeRoutes.length === 0 && distanceRoutes.length === 0) {
+            alert("No valid routes found."); // Keep alert if absolutely no routes are returned.
           }
         })
         .catch(error => {
           console.error('Error calculating optimized route:', error);
+          // Ensure states are reset even on error, though `finally` handles `isCalculatingRoute`
+          this.routesByTime = [];
+          this.routesByDistance = [];
+          this.selectedRouteId = null;
+          this.currentSelectedRoute = null;
+          this.displayableSchedule = null;
           alert('Error calculating route: ' + (error.response?.data?.message || 'Server error'));
         })
         .finally(() => {
@@ -763,6 +768,16 @@ export default {
 </script>
 <style scoped>
 /* Add styling for .map-display-component if needed, e.g., margin */
+.placeholder-message-section {
+  background-color: #f0f8ff; /* Light Alice Blue, similar to schedule display */
+  padding: 20px;
+  border-radius: 6px;
+  margin-bottom: 25px; /* Consistent with other sections */
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+  text-align: center;
+  color: #555; /* Subdued text color */
+  font-style: italic;
+}
 .map-display-component {
   margin-top: 20px;
   margin-bottom: 20px;
