@@ -18,4 +18,135 @@ body {
 .error-message {
     color: #e53935;
     font-weight: bold;
+}
+
+.notification-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1000;
+}
+
+.notification {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  background: white;
+  min-width: 300px;
+  max-width: 400px;
+  animation: slideIn 0.3s ease-out;
+}
+
+.notification.success {
+  border-left: 4px solid #52c41a;
+}
+
+.notification.error {
+  border-left: 4px solid #f5222d;
+}
+
+.notification.warning {
+  border-left: 4px solid #faad14;
+}
+
+.notification.info {
+  border-left: 4px solid #1890ff;
+}
+
+.notification-icon {
+  margin-right: 12px;
+  font-size: 20px;
+}
+
+.notification-content {
+  flex: 1;
+}
+
+.notification-title {
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.notification-message {
+  color: #666;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Main layout for dashboard */
+.main-layout {
+  display: flex;
+  flex-wrap: wrap; /* Allow wrapping on smaller screens */
+  gap: 20px;
+}
+
+.controls-section {
+  flex: 1;
+  min-width: 350px; /* Ensure controls have enough space */
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.map-section {
+  flex: 2;
+  min-height: 500px; /* Ensure map has a good height */
+  position: relative; /* Establish a stacking context */
+}
+
+/* Input and suggestions styling */
+.input-group {
+  position: relative; /* Crucial for positioning the suggestions list */
+}
+
+.suggestions-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background-color: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  z-index: 1001; /* CRITICAL: Must be higher than map elements */
+}
+
+.suggestions-list li {
+  padding: 10px 15px;
+  cursor: pointer;
+  border-bottom: 1px solid #eee;
+}
+
+.suggestions-list li:last-child {
+  border-bottom: none;
+}
+
+.suggestions-list li:hover {
+  background-color: #f5f5f5;
+}
+
+.suggestions-list li strong {
+  display: block;
+  font-size: 1em;
+  color: #333;
+}
+
+.suggestions-list li small {
+  color: #777;
+  font-size: 0.85em;
 } 

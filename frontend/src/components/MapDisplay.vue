@@ -41,12 +41,14 @@ export default {
       driving: null, // To store the AMap.Driving instance
       geocoder: null, // To store AMap.Geocoder instance
       mapClickListener: null, // To store the map click listener function
-      currentRoutePolylines: [], // Stores AMap.Polyline objects for the optimized route
+      currentRoutePolylines: [], // Stores objects like { id: segmentId, polyline: AMap.Polyline, originalSegment: segment }
       currentRouteMarkers: [],   // Stores AMap.Marker objects for the optimized route
       showRouteInfo: false,
       routeInfo: null,
       routeSummary: null,
-      travelMode: 'DRIVING'
+      travelMode: 'DRIVING',
+      highlightedPolylineRef: null, // Stores the currently highlighted AMap.Polyline instance
+      defaultPolylineStyle: { strokeColor: "#3366FF", strokeOpacity: 0.8, strokeWeight: 6 },
     };
   },
   watch: {
@@ -152,12 +154,17 @@ export default {
         this.currentMarker = null;
       }
       if (this.currentRoutePolylines && this.currentRoutePolylines.length > 0) {
-        this.map.remove(this.currentRoutePolylines);
+        // If polylines are stored as {id, polyline, ...}, iterate and remove polyline property
+        this.currentRoutePolylines.forEach(pEntry => this.map.remove(pEntry.polyline));
         this.currentRoutePolylines = [];
       }
       if (this.currentRouteMarkers && this.currentRouteMarkers.length > 0) {
         this.map.remove(this.currentRouteMarkers);
         this.currentRouteMarkers = [];
+      }
+      if (this.highlightedPolylineRef) { // Ensure any lingering highlight reference is cleared
+        // Its style would have been reset or it was removed with currentRoutePolylines
+        this.highlightedPolylineRef = null;
       }
       // console.log('Cleared all map elements (driving route, markers, optimized route polylines)');
     },
@@ -182,12 +189,18 @@ export default {
               path: path,
               strokeColor: "#3366FF", // Default color
               strokeOpacity: 0.8,
-              strokeWeight: 6,
+              strokeWeight: this.defaultPolylineStyle.strokeWeight,
               // borderWeight: 1, // Optional: Add a border to the polyline
               // strokeStyle: "solid", // "solid" or "dashed"
             });
             this.map.add(polyline);
-            this.currentRoutePolylines.push(polyline);
+            // Store with an ID and the polyline instance
+            const segmentId = segment.from_id + '_' + segment.to_id; // Create a unique ID for the segment
+            this.currentRoutePolylines.push({
+              id: segmentId,
+              polyline: polyline,
+              originalSegment: segment // Store original segment for reference if needed
+            });
           }
         }
       });
@@ -211,9 +224,37 @@ export default {
 
       // Adjust map view to fit all new polylines and markers
       if (this.currentRoutePolylines.length > 0 || this.currentRouteMarkers.length > 0) {
-         // Create a new AMap.OverlayGroup with all polylines and markers to easily setFitView
-        const overlayGroup = new AMap.OverlayGroup([...this.currentRoutePolylines, ...this.currentRouteMarkers]);
-        this.map.setFitView(overlayGroup.getOverlays(), false, [60, 60, 60, 60], 18); // false for immediate, 60px padding, maxZoom 18
+        const allOverlaysForFitView = this.currentRoutePolylines.map(pEntry => pEntry.polyline).concat(this.currentRouteMarkers);
+        if (allOverlaysForFitView.length > 0) {
+          this.map.setFitView(allOverlaysForFitView, false, [60, 60, 60, 60], 18); // false for immediate, 60px padding, maxZoom 18
+        }
+      }
+    },
+    highlightSegment(segmentToHighlight, stepIndex) { // stepIndex is currently unused but available
+      // Reset previously highlighted polyline (if any)
+      if (this.highlightedPolylineRef) {
+        this.highlightedPolylineRef.setOptions(this.defaultPolylineStyle);
+        this.highlightedPolylineRef = null;
+      }
+
+      // Find and highlight the new segment
+      // The ID for the segment was created as from_id + '_' + to_id in drawOptimizedRoute
+      const segmentIdToMatch = segmentToHighlight.from_id + '_' + segmentToHighlight.to_id;
+      const polylineEntry = this.currentRoutePolylines.find(p => p.id === segmentIdToMatch);
+
+      if (polylineEntry && polylineEntry.polyline) {
+        polylineEntry.polyline.setOptions({
+          strokeColor: '#FF0000', // Highlight color (e.g., red)
+          strokeOpacity: 1,
+          strokeWeight: 8, // Thicker
+        });
+        this.highlightedPolylineRef = polylineEntry.polyline;
+        // Optionally zoom/pan to the highlighted segment
+        // This might be too aggressive if user is just clicking through steps quickly
+        // this.map.setFitView([polylineEntry.polyline], false, [100,100,100,100], 16);
+        console.log(`Highlighted segment: ${segmentIdToMatch}, step: ${stepIndex}`);
+      } else {
+        console.warn(`Polyline for segment ${segmentIdToMatch} not found to highlight.`);
       }
     },
     displayRoute(originAddress, destinationAddress) {

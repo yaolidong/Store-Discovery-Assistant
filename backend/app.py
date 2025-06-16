@@ -99,7 +99,7 @@ def geocode_address(api_key, address, city=None):
         return None
     return None
 
-def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=None):
+def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=None, max_results=50):
     """
     Searches for POIs using Amap Place Text Search API.
     Returns a list of POI dictionaries or None.
@@ -126,6 +126,31 @@ def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=N
         response = requests.get(url, params=params, timeout=5)
         response.raise_for_status()
         data = response.json()
+
+        all_pois = []
+        page = 1
+        offset = 25
+        
+        while len(all_pois) < max_results:
+            params = {
+                "key": api_key,
+                "keywords": keywords,
+                "offset": offset,
+                "page": page,
+            }
+            if data.get("status") == "1" and data.get("pois"):
+                current_pois = data["pois"]
+                all_pois.extend(current_pois)
+                
+                # 如果返回的结果少于offset，说明没有更多数据了
+                if len(current_pois) < offset:
+                    break
+                    
+                page += 1
+            else:
+                break
+        
+        return all_pois[:max_results]  # 限制最终返回数量
 
         if data.get("status") == "1" and data.get("pois"):
             pois_data = []
@@ -182,6 +207,91 @@ def _parse_transit_polyline(transit_details):
     return ";".join(filter(None, polylines)) if polylines else None
 
 
+def _parse_transit_details(transit_segments):
+    """
+    Parses transit segments from Amap API response to extract detailed step-by-step instructions.
+    """
+    detailed_steps = []
+    if not transit_segments:
+        return detailed_steps
+
+    for segment in transit_segments:
+        if segment.get("walking") and isinstance(segment["walking"], dict) and segment["walking"].get("steps"):
+            for step in segment["walking"]["steps"]:
+                instruction = step.get("instruction", "Walk")
+                # Add distance and duration to instruction if available
+                distance = step.get("distance", "")
+                duration = step.get("duration", "")
+                if distance:
+                    instruction += f" (Distance: {distance}m"
+                if duration:
+                    instruction += f", Duration: {duration}s"
+                if distance or duration:
+                    instruction += ")"
+                detailed_steps.append({"type": "walk", "instruction": instruction})
+
+        elif segment.get("bus") and isinstance(segment["bus"], dict) and segment["bus"].get("lines"):
+            for bus_line_info in segment["bus"]["lines"]: # A segment can have multiple bus lines (e.g. alternatives)
+                line_name = bus_line_info.get("name", "Unknown Bus")
+                departure_stop = bus_line_info.get("departure_stop", {}).get("name", "Unknown Stop")
+                arrival_stop = bus_line_info.get("arrival_stop", {}).get("name", "Unknown Stop")
+                num_stops = len(bus_line_info.get("via_stops", [])) + 1 # departure is not via_stop
+
+                instruction = f"Take {line_name} from {departure_stop} to {arrival_stop} ({num_stops} stop{'s' if num_stops > 1 else ''})."
+
+                # Add via_stops details
+                via_stops_details = []
+                for via_stop in bus_line_info.get("via_stops", []):
+                    via_stops_details.append(via_stop.get("name", "Unknown Intermediate Stop"))
+                if via_stops_details:
+                    instruction += f" Via: {', '.join(via_stops_details)}."
+
+                detailed_steps.append({"type": "bus", "instruction": instruction})
+
+        elif segment.get("railway") and isinstance(segment["railway"], dict):
+            # Railway can have 'alters' for alternative trains, or direct info
+            railway_info_to_parse = segment["railway"]
+            if segment["railway"].get("alters") and segment["railway"]["alters"]:
+                railway_info_to_parse = segment["railway"]["alters"][0] # Take the first alternative
+
+            name = railway_info_to_parse.get("name", "Unknown Line")
+            trip = railway_info_to_parse.get("trip", "Unknown Trip") # More specific e.g. G1234
+            departure_stop = railway_info_to_parse.get("departure_stop", {}).get("name", "Unknown Station")
+            arrival_stop = railway_info_to_parse.get("arrival_stop", {}).get("name", "Unknown Station")
+            num_stops = len(railway_info_to_parse.get("via_stops", [])) + 1
+
+            instruction = f"Take {name} ({trip}) from {departure_stop} to {arrival_stop} ({num_stops} stop{'s' if num_stops > 1 else ''})."
+
+            # Add via_stops details for railway
+            via_stops_details_rail = []
+            for via_stop in railway_info_to_parse.get("via_stops", []):
+                 via_stops_details_rail.append(via_stop.get("name", "Unknown Intermediate Station"))
+            if via_stops_details_rail:
+                instruction += f" Via: {', '.join(via_stops_details_rail)}."
+
+            detailed_steps.append({"type": "railway", "instruction": instruction})
+
+        elif segment.get("taxi") and isinstance(segment["taxi"], dict):
+            # Taxi segments usually don't have detailed steps like bus/walk, more like a summary
+            distance = segment["taxi"].get("distance")
+            duration = segment["taxi"].get("duration")
+            instruction = "Take a taxi"
+            if distance: instruction += f" (Distance: {distance}m"
+            if duration: instruction += f", Duration: {duration}s"
+            if distance or duration: instruction += ")"
+            detailed_steps.append({"type": "taxi", "instruction": instruction})
+
+        else:
+            # Fallback for other types or if structure is unexpected
+            # Try to find any instruction-like field if available
+            instruction_text = "Transit segment (details not fully parsed)."
+            if segment.get("instruction"): # Unlikely top-level, but as a fallback
+                instruction_text = segment["instruction"]
+            detailed_steps.append({"type": "transit", "instruction": instruction_text})
+
+    return detailed_steps
+
+
 def get_public_transit_segment_details(api_key, origin_lat, origin_lng, dest_lat, dest_lng, city, strategy=0):
     """
     Gets public transit route details using Amap Integrated Directions API.
@@ -219,11 +329,13 @@ def get_public_transit_segment_details(api_key, origin_lat, origin_lng, dest_lat
             # Amap's total 'distance' for transit includes walking and in-vehicle. 'duration' is total time.
 
             full_polyline = _parse_transit_polyline(transit_path)
+            detailed_steps = _parse_transit_details(transit_path.get("segments"))
 
             return {
                 "distance": int(transit_path.get("distance", 0)), # Overall distance
                 "duration": int(transit_path.get("duration", 0)), # Overall duration
-                "polyline": full_polyline
+                "polyline": full_polyline,
+                "steps": detailed_steps
             }
         else:
             print(f"Amap Public Transit Error: {data.get('info')} from ({origin_lng},{origin_lat}) to ({dest_lng},{dest_lat}) in city {city}")
@@ -253,7 +365,7 @@ def get_driving_route_segment_details(api_key, origin_lat, origin_lng, dest_lat,
         "origin": f"{origin_lng},{origin_lat}",
         "destination": f"{dest_lng},{dest_lat}",
         "strategy": str(strategy),
-        "extensions": "base", # Request basic route information, "all" for steps and traffic
+        "extensions": "all", # Request basic route information, "all" for steps and traffic
     }
 
     try:
@@ -267,7 +379,8 @@ def get_driving_route_segment_details(api_key, origin_lat, origin_lng, dest_lat,
             return {
                 "distance": int(path.get("distance", 0)),
                 "duration": int(path.get("duration", 0)), # duration is 'duration' not 'duration_seconds'
-                "polyline": path.get("polyline") # Polyline for drawing on map
+                "polyline": path.get("polyline"), # Polyline for drawing on map
+                "steps": path.get("steps", []) # Add steps information
             }
         else:
             print(f"Amap Routing Error: {data.get('info')} from ({origin_lng},{origin_lat}) to ({dest_lng},{dest_lat})")
@@ -487,6 +600,7 @@ def optimize_route():
     shops_data = data.get('shops')
     mode = data.get('mode', 'driving')
     city_param = data.get('city') # City name or adcode, used for public transit
+    preferred_shop_ids = data.get('preferred_shop_ids', []) # Added
 
     if not home_location_data or 'latitude' not in home_location_data or 'longitude' not in home_location_data:
         return jsonify({'message': 'Missing or invalid "home_location". It must be an object with "latitude" and "longitude".'}), 400
@@ -557,71 +671,162 @@ def optimize_route():
     # TSP using permutations for shops (points 1 to num_points-1)
     shop_indices = list(range(1, num_points)) # Indices of shops in all_coords/all_points_objects
 
-    min_total_distance = float('inf')
-    best_path_indices = [] # Stores indices relative to all_coords
+    # Calculate total stay duration once - it's independent of path order
+    total_stay_duration_val = 0
+    if shop_indices: # Only calculate if there are shops
+        for shop_idx_in_all_points in shop_indices: # Iterate through original shop indices
+             total_stay_duration_val += all_points_objects[shop_idx_in_all_points].get('stay_duration', 0)
 
-    if not shop_indices: # Only home location, no shops
-        return jsonify({
+    # Handle case with no shops
+    if not shop_indices:
+        home_route_segment = {
+            "from_name": home_point["name"], "to_name": home_point["name"],
+            "from_id": home_point["id"], "to_id": home_point["id"],
+            "distance": 0, "duration": 0, "polyline": "", "steps": []
+        }
+        single_point_route_data = {
             'optimized_order': [home_point],
             'total_distance': 0,
-            'total_duration': 0,
-            'route_segments': []
+            'total_travel_time': 0,
+            'total_stay_time': 0,
+            'total_overall_duration': 0,
+            'route_segments': [] # No travel segments if only one point
+        }
+        return jsonify({
+            "routes": {
+                "shortest_distance": single_point_route_data,
+                "fastest_travel_time": single_point_route_data
+            },
+            "message": "No shops to visit. Only home location provided."
         }), 200
 
-    for p in itertools.permutations(shop_indices):
-        current_distance = 0
-        current_path_indices = [0] + list(p) + [0] # Home -> Shops -> Home
+    # --- Optimization Pass 1: Shortest Distance ---
+    min_total_distance_val = float('inf')
+    best_path_indices_distance = []
 
+    for p in itertools.permutations(shop_indices):
+        current_distance_for_perm = 0
+        current_path_indices = [0] + list(p) + [0] # Home -> Shops -> Home
         valid_permutation = True
         for i in range(len(current_path_indices) - 1):
             u, v = current_path_indices[i], current_path_indices[i+1]
-            if cost_matrix[u][v] is None: # Should have been caught earlier, but as a safeguard
+            if cost_matrix[u][v] is None:
                 valid_permutation = False
                 break
-            current_distance += cost_matrix[u][v]['distance']
+            current_distance_for_perm += cost_matrix[u][v]['distance']
 
-        if valid_permutation and current_distance < min_total_distance:
-            min_total_distance = current_distance
-            best_path_indices = current_path_indices
+        if valid_permutation and current_distance_for_perm < min_total_distance_val:
+            min_total_distance_val = current_distance_for_perm
+            best_path_indices_distance = current_path_indices
 
-    if not best_path_indices:
-        return jsonify({'message': 'Could not find an optimal route. Check segment routing.'}), 500
+    if not best_path_indices_distance:
+        return jsonify({'message': 'Could not find an optimal route (distance-based). Check segment routing.'}), 500
 
-    # Construct final response with full segment details for the best path
-    optimized_order_objects = [all_points_objects[i] for i in best_path_indices]
-    route_segments_details = []
-    total_travel_duration = 0
-    total_stay_duration = 0
-
-    # Calculate total travel duration from segments
-    for i in range(len(best_path_indices) - 1):
-        u, v = best_path_indices[i], best_path_indices[i+1]
-        segment_info = cost_matrix[u][v] # Already fetched, includes polyline
-        route_segments_details.append({
-            "from_name": all_points_objects[u]["name"],
-            "to_name": all_points_objects[v]["name"],
-            "from_id": all_points_objects[u]["id"],
-            "to_id": all_points_objects[v]["id"],
-            "distance": segment_info['distance'],
-            "duration": segment_info['duration'], # This is travel time for the segment
-            "polyline": segment_info['polyline']
+    # Construct details for the shortest distance route
+    optimized_order_objects_distance = [all_points_objects[i] for i in best_path_indices_distance]
+    route_segments_details_distance = []
+    total_travel_duration_for_distance_route = 0
+    for i in range(len(best_path_indices_distance) - 1):
+        u, v = best_path_indices_distance[i], best_path_indices_distance[i+1]
+        segment_info = cost_matrix[u][v]
+        route_segments_details_distance.append({
+            "from_name": all_points_objects[u]["name"], "to_name": all_points_objects[v]["name"],
+            "from_id": all_points_objects[u]["id"], "to_id": all_points_objects[v]["id"],
+            "distance": segment_info['distance'], "duration": segment_info['duration'],
+            "polyline": segment_info['polyline'], "steps": segment_info.get('steps', [])
         })
-        total_travel_duration += segment_info['duration']
+        total_travel_duration_for_distance_route += segment_info['duration']
 
-    # Calculate total stay duration for shops in the chosen path
-    # The first and last points in best_path_indices are 'home', which has stay_duration 0.
-    # Shops are all_points_objects[idx] where idx is in best_path_indices[1:-1]
-    for shop_idx_in_all_points in best_path_indices[1:-1]: # Exclude home at start and end
-        # all_points_objects already has stay_duration (either provided or defaulted to 0)
-        total_stay_duration += all_points_objects[shop_idx_in_all_points].get('stay_duration', 0)
+    overall_total_duration_distance = total_travel_duration_for_distance_route + total_stay_duration_val
 
-    overall_total_duration = total_travel_duration + total_stay_duration
+    shortest_distance_route_data = {
+        'optimized_order': optimized_order_objects_distance,
+        'total_distance': min_total_distance_val,
+        'total_travel_time': total_travel_duration_for_distance_route,
+        'total_stay_time': total_stay_duration_val,
+        'total_overall_duration': overall_total_duration_distance,
+        'route_segments': route_segments_details_distance
+    }
+
+    # --- Optimization Pass 2: Fastest Travel Time ---
+    min_total_travel_duration_val = float('inf')
+    best_path_indices_time = []
+
+    for p in itertools.permutations(shop_indices):
+        current_travel_duration_for_perm = 0
+        current_path_indices = [0] + list(p) + [0] # Home -> Shops -> Home
+        valid_permutation = True
+        for i in range(len(current_path_indices) - 1):
+            u, v = current_path_indices[i], current_path_indices[i+1]
+            if cost_matrix[u][v] is None: # This check is crucial
+                valid_permutation = False
+                break
+            current_travel_duration_for_perm += cost_matrix[u][v]['duration']
+
+        if valid_permutation and current_travel_duration_for_perm < min_total_travel_duration_val:
+            min_total_travel_duration_val = current_travel_duration_for_perm
+            best_path_indices_time = current_path_indices
+
+    fastest_travel_time_route_data = None
+    if not best_path_indices_time:
+        # This might happen if somehow no valid path for time was found, though unlikely if distance one was.
+        # Or if all segments had 0 duration (highly improbable).
+        # For now, we'll allow `fastest_travel_time_route_data` to be None if no path is found.
+        # The frontend would need to handle this case.
+        pass # fastest_travel_time_route_data remains None
+    else:
+        optimized_order_objects_time = [all_points_objects[i] for i in best_path_indices_time]
+        route_segments_details_time = []
+        actual_total_distance_for_time_route = 0
+        for i in range(len(best_path_indices_time) - 1):
+            u, v = best_path_indices_time[i], best_path_indices_time[i+1]
+            segment_info = cost_matrix[u][v]
+            route_segments_details_time.append({
+                "from_name": all_points_objects[u]["name"], "to_name": all_points_objects[v]["name"],
+                "from_id": all_points_objects[u]["id"], "to_id": all_points_objects[v]["id"],
+                "distance": segment_info['distance'], "duration": segment_info['duration'],
+                "polyline": segment_info['polyline'], "steps": segment_info.get('steps', [])
+            })
+            actual_total_distance_for_time_route += segment_info['distance']
+
+        # total_stay_duration_val is the same as for the distance route
+        overall_total_duration_time = min_total_travel_duration_val + total_stay_duration_val
+
+        fastest_travel_time_route_data = {
+            'optimized_order': optimized_order_objects_time,
+            'total_distance': actual_total_distance_for_time_route,
+            'total_travel_time': min_total_travel_duration_val,
+            'total_stay_time': total_stay_duration_val, # Same as before
+            'total_overall_duration': overall_total_duration_time,
+            'route_segments': route_segments_details_time
+        }
+
+    # Filter routes based on preferred_shop_ids
+    if preferred_shop_ids:
+        preferred_shop_ids_set = set(str(shop_id) for shop_id in preferred_shop_ids) # Convert to set of strings
+
+        # Filter shortest_distance_route_data
+        if shortest_distance_route_data:
+            route_shop_ids_distance = set(
+                str(shop['id']) for shop in shortest_distance_route_data['optimized_order'] if str(shop['id']) != 'home'
+            )
+            if not preferred_shop_ids_set.issubset(route_shop_ids_distance):
+                shortest_distance_route_data = None
+
+        # Filter fastest_travel_time_route_data
+        if fastest_travel_time_route_data:
+            route_shop_ids_time = set(
+                str(shop['id']) for shop in fastest_travel_time_route_data['optimized_order'] if str(shop['id']) != 'home'
+            )
+            if not preferred_shop_ids_set.issubset(route_shop_ids_time):
+                fastest_travel_time_route_data = None
 
     return jsonify({
-        'optimized_order': optimized_order_objects,
-        'total_distance': min_total_distance, # This is purely travel distance
-        'total_duration': overall_total_duration, # Travel time + Stay time
-        'route_segments': route_segments_details # Segments only show travel time
+        "routes": {
+            "shortest_distance": shortest_distance_route_data,
+            "fastest_travel_time": fastest_travel_time_route_data # This can be None
+        },
+        "message": "Successfully generated route options."
     }), 200
 
 

@@ -22,5 +22,5 @@ ENV FLASK_RUN_HOST=0.0.0.0
 ENV FLASK_DEBUG=True
 # Enables debug mode, helpful for development
 
-# Run app.py when the container launches
-CMD ["flask", "run"]
+# Run app.py with Gunicorn when the container launches
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--reload", "app:app"]
