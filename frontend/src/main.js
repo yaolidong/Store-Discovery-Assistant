@@ -956,23 +956,22 @@ const Dashboard = {
           <div v-if="showShopSuggestions && shopSuggestions.length > 0" class="shop-suggestions">
             <div 
               v-for="suggestion in shopSuggestions" 
-              :key="suggestion.name"
+              :key="suggestion.id"
               @mousedown="selectShopSuggestion(suggestion)"
               class="suggestion-item"
             >
-              <div v-if="suggestion.type === 'chain'" class="suggestion-content">
+              <div v-if="suggestion.type === 'chain'">
                 <div class="suggestion-name">
-                  <span class="shop-type-badge chain">🔗 连锁店</span>
-                  {{ suggestion.name }}
-                </div>
-                <div class="suggestion-address">找到 {{ suggestion.count }} 家分店，将在规划时选择最优路线</div>
-              </div>
-              <div v-else class="suggestion-content">
-                <div class="suggestion-name">
-                  <span class="shop-type-badge private">🏪 私人店铺</span>
-                  {{ suggestion.name }}
+                  <strong>{{ suggestion.name }}</strong>
+                  <span class="badge chain">连锁店铺</span>
                 </div>
                 <div class="suggestion-address">{{ suggestion.address }}</div>
+                <div class="suggestion-status">{{ suggestion.status }}</div>
+              </div>
+              <div v-else>
+                <div class="suggestion-name">{{ suggestion.name }}</div>
+                <div class="suggestion-address">{{ suggestion.address }}</div>
+                <div class="suggestion-distance" v-if="suggestion.distance">{{ Math.round(suggestion.distance) }}m</div>
               </div>
             </div>
           </div>
@@ -1134,7 +1133,6 @@ const Dashboard = {
     return {
       // 界面状态
       isLoading: false,
-      showNotification: false,
       notificationMessage: '',
       notificationType: 'info',
       notificationDuration: 3000,
@@ -2142,36 +2140,41 @@ const Dashboard = {
       }, 200);
     },
     
+    // 修正此方法以正确处理连锁店和私人店铺
     selectShopSuggestion(suggestion) {
       let newShop;
+      
       if (suggestion.type === 'chain') {
+        // 当建议是连锁店时
         newShop = {
           id: Date.now(),
           name: suggestion.name,
-          type: 'chain',
-          address: `找到 ${suggestion.count} 家分店`,
+          type: 'chain', // 正确设置类型
+          address: `系统将在规划时自动选择最优分店`, 
           latitude: null,
           longitude: null
         };
-      } else { // private
+      } else { 
+        // 当建议是私人店铺时
         newShop = {
           id: suggestion.id || Date.now(),
           name: suggestion.name,
-          type: 'private',
+          type: 'private', // 正确设置类型
           address: suggestion.address,
           latitude: suggestion.latitude,
           longitude: suggestion.longitude
         };
       }
 
-      // 检查是否已添加
+      // 检查店铺是否已在列表中
       if (this.shopsToVisit.some(s => s.name.toLowerCase() === newShop.name.toLowerCase())) {
+          // 注意：这里调用的是 this.showNotification 方法，之前因为命名冲突而出错
           this.showNotification(`店铺 "${newShop.name}" 已在列表中`, 'warning');
       } else {
+          // 将带有正确 type 的对象推入列表
           this.shopsToVisit.push(newShop);
           this.showNotification(`"${newShop.name}" 已添加到探店列表`, 'success');
 
-          // 只有私人店铺（有坐标）才能立即在地图上标记
           if (newShop.type === 'private' && newShop.latitude && newShop.longitude) {
               const mapDisplay = this.$refs.mapDisplayRef;
               if (mapDisplay) {
@@ -4609,6 +4612,26 @@ p { color: #666; }
 .form-group select:focus {
   border-color: #667eea;
   box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* 新增样式 */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 0.75em;
+  font-weight: bold;
+  border-radius: 10px;
+  color: white;
+  margin-left: 8px;
+}
+.badge.chain {
+  background-color: #007bff;
+}
+.suggestion-status {
+  font-size: 0.8em;
+  color: #ff9800;
+  font-style: italic;
+  margin-top: 4px;
 }
 `;
 document.head.appendChild(style);

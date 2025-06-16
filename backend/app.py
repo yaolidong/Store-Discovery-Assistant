@@ -516,13 +516,20 @@ def get_home_location():
     }), 200
 
 # --- Shop Search Endpoint ---
+# 定义一个已知的连锁店品牌列表（可以根据需要扩展）
+CHAIN_STORE_KEYWORDS = {
+    '星巴克', 'starbucks', '肯德基', 'kfc', '麦当劳', 'mcdonald',
+    '必胜客', 'pizza hut', '汉堡王', 'burger king', '全家', 'familymart',
+    '7-eleven', '711', 'seven-eleven', '罗森', 'lawson', '便利蜂'
+}
+
 @app.route('/api/shops/find', methods=['POST'])
 def find_shops():
     data = request.get_json()
     if not data:
         return jsonify({'message': 'Request body must be JSON.'}), 400
 
-    keywords = data.get('keywords')
+    keywords = data.get('keywords', '').strip()
     latitude = data.get('latitude')
     longitude = data.get('longitude')
     city = data.get('city')
@@ -534,57 +541,56 @@ def find_shops():
     if not api_key:
         return jsonify({'message': 'Amap API key not configured on server.'}), 500
 
+    # 检查是否为连锁店搜索
+    is_chain_search = keywords.lower() in CHAIN_STORE_KEYWORDS
+
     location_str = None
     if latitude is not None and longitude is not None:
         try:
-            # Ensure lat/lon can be converted to float before using them
             lat_float = float(latitude)
             lon_float = float(longitude)
             location_str = f"{lon_float},{lat_float}"
         except ValueError:
             return jsonify({'message': 'Invalid latitude or longitude format.'}), 400
 
-    # Default radius for location-based search (e.g., 10km)
     radius = data.get('radius', 10000)
 
-    # 添加重试机制
-    max_retries = 3
-    retry_count = 0
-    last_error = None
+    try:
+        results = search_poi(
+            api_key=api_key,
+            keywords=keywords,
+            city=city,
+            location=location_str,
+            radius=radius if location_str else 5000,
+            max_results=50
+        )
 
-    while retry_count < max_retries:
-        try:
-            # Call the search_poi utility function
-            results = search_poi(
-                api_key=api_key,
-                keywords=keywords,
-                city=city,
-                location=location_str,
-                radius=radius if location_str else 5000 # Default radius if location is used
-            )
+        if results is None:
+            return jsonify({'message': 'Error occurred while searching for shops.'}), 500
 
-            if results is None:
-                # This case implies an error occurred during the API call in search_poi
-                # search_poi function already prints errors, so here we return a generic server error
-                return jsonify({'message': 'Error occurred while searching for shops.'}), 500
+        # 如果是连锁店搜索且找到了多家分店
+        if is_chain_search and len(results) > 1:
+            chain_suggestion = {
+                "id": f"chain_{keywords.lower()}",
+                "name": keywords,
+                "type": "chain",
+                "status": "待组合优化",
+                "address": f"在 {city or '附近'} 找到 {len(results)} 家分店",
+                "count": len(results)
+            }
+            return jsonify({'shops': [chain_suggestion]}), 200
 
-            if not results: # Empty list means no POIs found
-                return jsonify({'message': 'No shops found matching your query.'}), 404
+        if not results:
+            return jsonify({'message': 'No shops found matching your query.'}), 404
 
-            return jsonify({'shops': results}), 200
+        return jsonify({'shops': results}), 200
 
-        except Exception as e:
-            last_error = str(e)
-            retry_count += 1
-            if retry_count < max_retries:
-                time.sleep(1)  # 等待1秒后重试
-                continue
-            else:
-                app.logger.error(f"Failed to search shops after {max_retries} retries. Last error: {last_error}")
-                return jsonify({
-                    'message': 'Failed to search shops after multiple attempts.',
-                    'error': last_error
-                }), 500
+    except Exception as e:
+        app.logger.error(f"Failed to search shops. Error: {str(e)}")
+        return jsonify({
+            'message': 'Failed to search shops due to an internal error.',
+            'error': str(e)
+        }), 500
 
 # --- Route Optimization Endpoint ---
 MAX_SHOPS_FOR_PERMUTATIONS = 6 # Max shops (N) for permutation-based TSP
