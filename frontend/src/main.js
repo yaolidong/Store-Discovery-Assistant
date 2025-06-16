@@ -1122,58 +1122,130 @@ const Dashboard = {
         </button>
         
         <!-- 路线信息显示 -->
-            <div v-if="routeCombinations && routeCombinations.length > 0" class="route-options">
-      <h3>可选路线 ({{ routeCombinations.length }}条)</h3>
-      <div class="route-list">
-        <div 
-          v-for="(route, index) in routeCombinations" 
-          :key="index"
-          :class="['route-item', { 'active': index === currentRouteIndex }]"
-          @click="switchToRoute(index)"
-        >
-          <div class="route-number">{{ index + 1 }}</div>
-          <div class="route-details">
-            <div class="route-shops">
-              {{ route.shops.map(s => s.name).join(' → ') }}
-            </div>
-            <div class="route-summary">
-              <span>{{ formatDuration(route.totalTime) }}</span>
-              <span class="separator">|</span>
-              <span>{{ formatDistance(route.totalDistance) }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+        <div v-if="Array.isArray(routeCombinations) && routeCombinations.length > 0" class="route-options">
+          <h3>
+            <i class="icon">🛣️</i> 
+            可选路线 ({{ Array.isArray(routeCombinations) ? routeCombinations.length : 0 }}条)
+            <span class="route-info-badge">智能分析所有分店和访问顺序</span>
+          </h3>
+          
+          <div class="route-list">
+            <div 
+              v-for="(route, index) in (routeCombinations && routeCombinations.length ? routeCombinations : [])" 
+              :key="'route_' + (route && route.originalIndex ? route.originalIndex : index) + '_' + (route && route.type ? route.type : '')"
+              :class="['route-item', { 'active': index === currentRouteIndex }]"
+              @click="switchToRoute(index)"
+            >
+               <div class="route-number">{{ index + 1 }}</div>
+               <div class="route-details">
+                 <div class="route-header">
+                   <span class="route-type-badge" :class="route.type">
+                    {{ route?.optimizationType || route?.type || '' }}
+                   </span>
+                   <span class="route-rank">第{{ route?.rank || (index+1) }}名</span>
+                 </div>
+                 <div class="route-shops">
+                   {{ route && route.combination ? route.combination.map(function(s){return s.name;}).join(' → ') : '加载中...' }}
+                 </div>
+                 <div class="route-summary">
+                   <span>{{ formatDuration(((route && route.totalTime ? route.totalTime : 0) / 60)) }}</span>
+                   <span class="separator">|</span>
+                   <span>{{ formatDistance(route && route.totalDistance ? route.totalDistance : 0) }}</span>
+                 </div>
+                 <div class="route-brands" v-if="route && route.combination">
+                   <span 
+                     v-for="shop in route.combination" 
+                     :key="shop.id"
+                     class="brand-tag"
+                     :class="{ 'chain-brand': shop.brandName, 'private-brand': !shop.brandName }"
+                   >
+                     {{ shop.brandName || '私人店铺' }}
+                   </span>
+                 </div>
+               </div>
+             </div>
+           </div>
+           
+           <!-- 路线统计信息 -->
+           <div class="route-statistics">
+             <div class="stat-item">
+               <span class="stat-label">按时间优化</span>
+               <span class="stat-value">{{ routeCombinations && routeCombinations.length ? routeCombinations.filter(function(r){return r.type === 'fastest'}).length : 0 }}条</span>
+             </div>
+             <div class="stat-item">
+               <span class="stat-label">按距离优化</span>
+               <span class="stat-value">{{ routeCombinations && routeCombinations.length ? routeCombinations.filter(function(r){return r.type === 'shortest'}).length : 0 }}条</span>
+             </div>
+           </div>
+         </div>
 
-    <div v-if="showRouteInfo && routeInfo" class="route-info">
-      <div class="route-summary">
-        <h3>路线摘要</h3>
-        <p>总时间: {{ routeSummary.totalTime }}</p>
-        <p>总距离: {{ routeSummary.totalDistance }}</p>
-        <p>出行方式: {{ travelMode === 'TRANSIT' ? '公交' : travelMode === 'DRIVING' ? '驾车' : '步行' }}</p>
-      </div>
-      
-      <div class="route-details">
-        <h3>详细路线</h3>
-        <div v-for="(segment, index) in routeInfo.segments" :key="index" class="route-segment">
-          <div class="segment-header">
-            <span class="segment-number">{{ index + 1 }}</span>
-            <span class="segment-name">{{ segment.name }}</span>
-          </div>
-          <div class="segment-details">
-            <p v-if="segment.duration">时间: {{ formatDuration(segment.duration) }}</p>
-            <p v-if="segment.distance">距离: {{ formatDistance(segment.distance) }}</p>
-            <p v-if="segment.instructions">{{ segment.instructions }}</p>
-          </div>
-        </div>
-      </div>
-    </div>
-      </div>
+         <!-- 当前路线详细信息 -->
+         <div v-if="showRouteInfo && routeInfo" class="route-info">
+           <div class="route-summary">
+             <h3><i class="icon">📋</i> 路线摘要</h3>
+             <div class="summary-grid">
+               <div class="summary-item">
+                 <span class="summary-label">总时间</span>
+                 <span class="summary-value">{{ routeSummary && routeSummary.totalTime ? routeSummary.totalTime : '计算中...' }}</span>
+               </div>
+               <div class="summary-item">
+                 <span class="summary-label">总距离</span>
+                 <span class="summary-value">{{ routeSummary && routeSummary.totalDistance ? routeSummary.totalDistance : '计算中...' }}</span>
+               </div>
+               <div class="summary-item">
+                 <span class="summary-label">优化类型</span>
+                 <span class="summary-value">{{ routeSummary && routeSummary.optimizationType ? routeSummary.optimizationType : '未知' }}</span>
+               </div>
+               <div class="summary-item">
+                 <span class="summary-label">出行方式</span>
+                 <span class="summary-value">{{ travelMode === 'TRANSIT' ? '公交' : '驾车' }}</span>
+               </div>
+             </div>
+           </div>
+           
+           <!-- 详细路线步骤 -->
+           <div class="route-details">
+             <h3><i class="icon">🗺️</i> 详细路线</h3>
+             <div v-if="routeInfo && routeInfo.route_segments && routeInfo.route_segments.length > 0" class="route-segments">
+               <div v-for="(segment, index) in routeInfo.route_segments" :key="'segment_' + index" class="route-segment">
+                 <div class="segment-header">
+                   <span class="segment-number">{{ index + 1 }}</span>
+                   <span class="segment-from-to">
+                    {{ segment.from_name }} → {{ segment.to_name }}
+                   </span>
+                 </div>
+                 <div class="segment-details">
+                   <div class="segment-stats">
+                     <span>距离: {{ formatDistance(segment && segment.distance ? segment.distance : 0) }}</span>
+                     <span>时间: {{ formatDuration(((segment && segment.duration ? segment.duration : 0) / 60)) }}</span>
+                   </div>
+                   <div v-if="segment && segment.steps && segment.steps.length > 0" class="segment-steps">
+                     <div v-for="(step, stepIndex) in segment.steps.slice(0, 3)" :key="'step_' + stepIndex" class="step-item">
+                       {{ step.instruction || '无详细指导' }}
+                     </div>
+                     <div v-if="segment.steps.length > 3" class="more-steps">
+                       ...还有{{ segment.steps.length - 3 }}个步骤
+                     </div>
+                   </div>
+                 </div>
+               </div>
+             </div>
+             <div v-else class="no-route-details">
+               路线详情加载中或暂不可用...
+             </div>
+           </div>
+         </div>
 
-      <button @click="logoutUser" class="logout-btn">
-        <i class="icon">👋</i> 退出登录
-      </button>
+         <!-- 加载状态指示器 -->
+         <div v-if="isLoading" class="loading-indicator">
+           <div class="loading-spinner"></div>
+           <p>正在进行路线规划计算，请稍候...</p>
+         </div>
+
+         <button @click="logoutUser" class="logout-btn">
+           <i class="icon">👋</i> 退出登录
+         </button>
+      </div>
     </div>
   `,
   data() {
@@ -2251,40 +2323,31 @@ const Dashboard = {
         this.shopSuggestions = [];
         return;
       }
-
+      
       try {
         const payload = {
           keywords: this.shopInput.trim(),
         };
-
+        
         if (this.selectedCity) {
           payload.city = this.selectedCity;
         }
-
+        
+        console.log('搜索店铺参数:', payload);
         const response = await axios.post('/api/shops/find', payload);
         
         if (response.data.shops && response.data.shops.length > 0) {
-          const foundShops = response.data.shops;
-          if (foundShops.length > 1) {
-            // 连锁店
-            this.shopSuggestions = [{
-              name: this.shopInput.trim(),
-              type: 'chain',
-              count: foundShops.length
-            }];
-          } else {
-            // 私人店铺
-            this.shopSuggestions = [{
-              ...foundShops[0],
-              type: 'private'
-            }];
-          }
+          // 返回前8个建议
+          this.shopSuggestions = response.data.shops.slice(0, 8);
+          console.log('店铺建议:', this.shopSuggestions);
         } else {
           this.shopSuggestions = [];
+          this.showNotification(`未找到"${this.shopInput}"相关店铺，请尝试其他关键词`, 'warning');
         }
       } catch (error) {
         console.error('Error fetching shop suggestions:', error);
         this.shopSuggestions = [];
+        this.showNotification('搜索失败，请检查网络连接', 'error');
       }
     },
     
@@ -2296,50 +2359,9 @@ const Dashboard = {
     
     // 修正此方法以正确处理连锁店和私人店铺
     selectShopSuggestion(suggestion) {
-      let newShop;
-      
-      if (suggestion.type === 'chain') {
-        // 当建议是连锁店时
-        newShop = {
-          id: Date.now(),
-          name: suggestion.name,
-          type: 'chain', // 正确设置类型
-          address: `系统将在规划时自动选择最优分店`, 
-          latitude: null,
-          longitude: null
-        };
-      } else { 
-        // 当建议是私人店铺时或具体分店时，动态判断类型
-        newShop = {
-          id: suggestion.id || Date.now(),
-          name: suggestion.name,
-          type: this.isChainStore(suggestion.name) ? 'chain' : 'private',
-          address: suggestion.address,
-          latitude: suggestion.latitude,
-          longitude: suggestion.longitude
-        };
-      }
-
-      // 检查店铺是否已在列表中
-      if (this.shopsToVisit.some(s => s.name.toLowerCase() === newShop.name.toLowerCase())) {
-          // 注意：这里调用的是 this.showNotification 方法，之前因为命名冲突而出错
-          this.showNotification(`店铺 "${newShop.name}" 已在列表中`, 'warning');
-      } else {
-          // 将带有正确 type 的对象推入列表
-          this.shopsToVisit.push(newShop);
-          this.showNotification(`"${newShop.name}" 已添加到探店列表`, 'success');
-
-          if (newShop.type === 'private' && newShop.latitude && newShop.longitude) {
-              const mapDisplay = this.$refs.mapDisplayRef;
-              if (mapDisplay) {
-                  mapDisplay.addShopMarker(newShop);
-              }
-          }
-      }
-      
-      this.shopInput = '';
-      this.showShopSuggestions = false;
+      this.addShopByName(suggestion.name);
       this.shopSuggestions = [];
+      this.shopInput = '';
     },
     
     removeShop(shopId) {
@@ -2578,261 +2600,168 @@ const Dashboard = {
     },
     
     formatTime(seconds) {
-      const hours = Math.floor(seconds / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
-      
-      if (hours > 0) {
-        return `${hours}小时${minutes}分钟`;
-      } else {
-        return `${minutes}分钟`;
-      }
+      if (seconds === null || isNaN(seconds)) return '未知';
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      return `${h > 0 ? h + '小时' : ''}${m}分钟`;
     },
 
-    // 修复后的getDirections方法和相关辅助方法
+    /**
+     * @description 获取最优路线的核心方法（重构版）。
+     * 该方法收集所有用户输入，通过一次API调用将计算任务委托给后端。
+     * 后端通过'/api/route/batch-optimize'接口接收所有信息，完成所有复杂的组合、排序和路线规划。
+     */
     async getDirections() {
+        if (this.isPlanning) return; //  <-- 添加这一行
+        this.isPlanning = true;      //  <-- 添加这一行
         this.isLoading = true;
-        this.showNotification('正在搜索所有候选分店...', 'info');
+        this.showNotification('正在准备路线优化...', 'info');
+
+        // 初始化UI状态
+        this.routeCombinations = [];
+        this.currentRouteIndex = 0;
+        this.routeInfo = null;
+        if (this.$refs.mapDisplayRef) {
+            this.$refs.mapDisplayRef.clearRoute(); // 清除地图上的旧路线
+        }
 
         try {
-            // 1. 验证家的位置数据
+            // 1. 验证家的位置
             if (!this.homeLocation || !this.homeLocation.latitude || !this.homeLocation.longitude) {
                 this.showNotification('请先设置家的位置', 'error');
+                this.isLoading = false;
+                this.isPlanning = false; //  <-- 添加这一行
                 return;
             }
-
-            console.log('家的位置:', this.homeLocation);
 
             // 2. 分离普通店铺和连锁店
             const privateStores = this.shopsToVisit.filter(s => s.type !== 'chain' && s.latitude && s.longitude);
             const chainStores = this.shopsToVisit.filter(s => s.type === 'chain');
 
-            console.log('私人店铺:', privateStores);
-            console.log('连锁店:', chainStores);
-
             if (privateStores.length === 0 && chainStores.length === 0) {
                 this.showNotification('请先添加要探访的店铺', 'error');
+                this.isLoading = false;
+                this.isPlanning = false; //  <-- 添加这一行
                 return;
             }
 
-            // 3. 获取所有连锁店的分店信息
+            // 3. 并行获取所有连锁店的分店信息
+            this.showNotification('正在搜索附近的所有连锁分店...', 'info');
             const chainStoreGroups = {};
-            
-            for (const chainStore of chainStores) {
-                this.showNotification(`正在搜索 ${chainStore.name} 的所有分店...`, 'info');
-                
+            const branchPromises = chainStores.map(async (chainStore) => {
                 try {
-                    const payload = {
+                    const response = await axios.post('/api/shops/find', {
                         keywords: chainStore.name,
                         city: this.selectedCity,
                         latitude: this.homeLocation.latitude,
                         longitude: this.homeLocation.longitude,
-                        radius: 20000 // 20km范围
-                    };
-                    
-                    console.log('搜索分店参数:', payload);
-                    
-                    const response = await axios.post('/api/shops/find', payload);
+                        radius: 20000,
+                        get_details: true
+                    });
+
                     const branches = response.data.shops || [];
-                    
-                    console.log(`${chainStore.name} 搜索结果:`, branches);
-                    
-                    if (branches.length > 0) {
-                        // 筛选并验证分店数据
-                        const validBranches = branches.filter(branch => {
-                            return branch.latitude && branch.longitude && 
-                                   !isNaN(parseFloat(branch.latitude)) && 
-                                   !isNaN(parseFloat(branch.longitude));
-                        });
-                        
-                        console.log(`${chainStore.name} 有效分店:`, validBranches);
-                        
-                        if (validBranches.length > 0) {
-                            // 计算距离并排序
-                            const nearbyBranches = validBranches
-                                .map(branch => {
-                                    const distance = this.calculateDistanceSafe(
-                                        this.homeLocation.longitude, this.homeLocation.latitude,
-                                        branch.longitude, branch.latitude
-                                    );
-                                    
-                                    return {
-                                        ...branch,
-                                        distanceToHome: distance,
-                                        originalChainId: chainStore.id,
-                                        brandName: chainStore.name
-                                    };
-                                })
-                                .filter(branch => branch.distanceToHome !== null && branch.distanceToHome < 15000) // 15km以内
-                                .sort((a, b) => a.distanceToHome - b.distanceToHome)
-                                .slice(0, 8); // 最多8家
-                            
-                            chainStoreGroups[chainStore.name] = nearbyBranches;
-                            this.showNotification(`${chainStore.name}: 找到 ${nearbyBranches.length} 家附近分店`, 'success');
-                        } else {
-                            this.showNotification(`${chainStore.name}: 所有分店数据无效`, 'warning');
-                            chainStoreGroups[chainStore.name] = [];
-                        }
-                    } else {
-                        this.showNotification(`未找到 ${chainStore.name} 的分店`, 'warning');
-                        chainStoreGroups[chainStore.name] = [];
+                    if (branches.length === 0) return;
+
+                    const validBranches = branches.filter(b => b.latitude && b.longitude && !isNaN(parseFloat(b.latitude)) && !isNaN(parseFloat(b.longitude)));
+                    if (validBranches.length === 0) return;
+
+                    const nearbyBranches = validBranches
+                        .map(branch => ({
+                            ...branch,
+                            distanceToHome: this.calculateDistanceSafe(this.homeLocation.longitude, this.homeLocation.latitude, branch.longitude, branch.latitude)
+                        }))
+                        .filter(b => b.distanceToHome != null && b.distanceToHome < 15000)
+                        .sort((a, b) => a.distanceToHome - b.distanceToHome)
+                        .slice(0, 4);
+
+                    if (nearbyBranches.length > 0) {
+                        chainStoreGroups[chainStore.name] = nearbyBranches.map(b => ({
+                            name: b.name,
+                            latitude: String(b.latitude),
+                            longitude: String(b.longitude),
+                            address: b.address,
+                            id: b.id
+                        }));
                     }
                 } catch (error) {
                     console.error(`搜索 ${chainStore.name} 分店失败:`, error);
-                    this.showNotification(`搜索 ${chainStore.name} 分店失败: ${error.message}`, 'error');
-                    chainStoreGroups[chainStore.name] = [];
+                    this.showNotification(`搜索 ${chainStore.name} 分店失败`, 'warning');
+                }
+            });
+
+            await Promise.all(branchPromises);
+            
+            if (chainStores.length > 0 && Object.keys(chainStoreGroups).length === 0) {
+                if (privateStores.length === 0) {
+                    this.showNotification('未能找到任何连锁品牌在附近的分店。', 'warning');
+                    this.isLoading = false;
+                    this.isPlanning = false; //  <-- 添加这一行
+                    return;
                 }
             }
 
-            // 4. 生成所有可能的分店组合
-            this.showNotification('正在生成所有可能的路线组合...', 'info');
-            
-            const storeCombinations = this.generateAllStoreCombinations(chainStoreGroups, privateStores);
-            
-            if (storeCombinations.length === 0) {
-                this.showNotification('没有找到有效的店铺组合', 'error');
+            // 4. 创建一个批量优化的API请求体
+            this.showNotification('请求后端进行智能路线规划...', 'info');
+            const batchPayload = {
+                home_location: {
+                    latitude: String(this.homeLocation.latitude),
+                    longitude: String(this.homeLocation.longitude),
+                    address: this.homeAddress
+                },
+                private_stores: privateStores.map(s => ({
+                    name: s.name,
+                    latitude: String(s.latitude),
+                    longitude: String(s.longitude),
+                    id: s.id,
+                    address: s.address
+                })),
+                chain_store_groups: chainStoreGroups,
+                travel_mode: this.travelMode.toUpperCase(),
+                stay_durations: this.shopsToVisit.reduce((acc, shop) => {
+                    acc[shop.id] = shop.stayDuration;
+                    return acc;
+                }, {}),
+                top_n: 5 
+            };
+
+            // 5. 发起唯一的、统一的后端API调用
+            console.log('向后端发送的批量优化请求:', JSON.stringify(batchPayload, null, 2));
+            const response = await axios.post('/api/route/batch-optimize', batchPayload);
+
+            const optimizedRoutes = response.data.routes;
+
+            if (!optimizedRoutes || optimizedRoutes.length === 0) {
+                this.showNotification('未能计算出任何有效路线，请尝试调整店铺或家的位置。', 'warning');
                 return;
             }
 
-            console.log(`生成了 ${storeCombinations.length} 种店铺组合`);
+            this.routeCombinations = optimizedRoutes.map((route, index) => ({
+                ...route,
+                originalIndex: index
+            }));
 
-            // 5. 计算所有组合的路线
-            this.showNotification(`正在计算 ${storeCombinations.length} 种路线...`, 'info');
+            this.showNotification(`成功获取 ${this.routeCombinations.length} 条优化路线!`, 'success');
             
-            const routeResults = [];
-            let processedCount = 0;
-            const maxCombinations = Math.min(storeCombinations.length, 10); // 减少到10个组合
-
-            for (let i = 0; i < maxCombinations; i++) {
-                const combination = storeCombinations[i];
-                
-                try {
-                    // 验证组合中的店铺数据
-                    const validStores = combination.filter(shop => {
-                        const hasValidCoords = shop.latitude && shop.longitude && 
-                                             !isNaN(parseFloat(shop.latitude)) && 
-                                             !isNaN(parseFloat(shop.longitude));
-                        if (!hasValidCoords) {
-                            console.warn('店铺坐标无效:', shop);
-                        }
-                        return hasValidCoords;
-                    });
-
-                    if (validStores.length === 0) {
-                        console.warn('组合中没有有效的店铺:', combination);
-                        continue;
-                    }
-
-                    // 准备API调用的数据
-                    const optimizePayload = {
-                        home_location: {
-                            latitude: parseFloat(this.homeLocation.latitude),
-                            longitude: parseFloat(this.homeLocation.longitude)
-                        },
-                        shops: validStores.map(shop => ({
-                            id: shop.id || `shop_${Date.now()}_${Math.random()}`,
-                            name: shop.name,
-                            latitude: parseFloat(shop.latitude),
-                            longitude: parseFloat(shop.longitude),
-                            stay_duration: (this.getStayDuration(shop.originalChainId || shop.id) || this.defaultStayDuration || 30) * 60
-                        })),
-                        mode: this.travelMode.toLowerCase() === 'transit' ? 'public_transit' : 'driving'
-                    };
-
-                    if (this.travelMode.toLowerCase() === 'transit' && this.selectedCity) {
-                        optimizePayload.city = this.selectedCity;
-                    }
-
-                    console.log(`组合 ${i + 1} API 请求数据:`, optimizePayload);
-
-                    const response = await axios.post('/api/route/optimize', optimizePayload);
-                    console.log(`组合 ${i + 1} API 响应:`, response.data);
-
-                    const routeData = response.data.routes?.fastest_travel_time || response.data.routes?.shortest_distance;
-
-                    if (routeData) {
-                        routeResults.push({
-                            combination: validStores,
-                            routeData: routeData,
-                            totalTime: routeData.total_overall_duration || routeData.total_travel_time || 0,
-                            totalDistance: routeData.total_distance || 0,
-                            timeScore: routeData.total_overall_duration || routeData.total_travel_time || 0,
-                            distanceScore: routeData.total_distance || 0
-                        });
-                    }
-
-                    processedCount++;
-                    if (processedCount % 3 === 0) {
-                        this.showNotification(`已计算 ${processedCount}/${maxCombinations} 种路线...`, 'info');
-                    }
-
-                } catch (error) {
-                    console.warn(`组合 ${i + 1} 路线计算失败:`, error);
-                    if (error.response) {
-                        console.log('错误响应:', error.response.data);
-                    }
-                }
-            }
-
-            if (routeResults.length === 0) {
-                this.showNotification('所有路线计算都失败了，请检查网络连接或数据格式', 'error');
-                return;
-            }
-
-            // 6. 按时间和距离分别排序
-            const routesByTime = [...routeResults].sort((a, b) => a.timeScore - b.timeScore);
-            const routesByDistance = [...routeResults].sort((a, b) => a.distanceScore - b.distanceScore);
-
-            // 7. 生成最终的路线选项（去重并限制数量）
-            const finalRoutes = [];
-            const addedRoutes = new Set();
-
-            // 添加最快的3条路线
-            for (let i = 0; i < Math.min(3, routesByTime.length); i++) {
-                const route = routesByTime[i];
-                const routeKey = this.generateRouteKey(route.combination);
-                if (!addedRoutes.has(routeKey)) {
-                    finalRoutes.push({
-                        ...route,
-                        type: 'fastest',
-                        rank: finalRoutes.length + 1
-                    });
-                    addedRoutes.add(routeKey);
-                }
-            }
-
-            // 添加最短距离的3条路线
-            for (let i = 0; i < Math.min(3, routesByDistance.length); i++) {
-                const route = routesByDistance[i];
-                const routeKey = this.generateRouteKey(route.combination);
-                if (!addedRoutes.has(routeKey)) {
-                    finalRoutes.push({
-                        ...route,
-                        type: 'shortest',
-                        rank: finalRoutes.length + 1
-                    });
-                    addedRoutes.add(routeKey);
-                }
-            }
-
-            // 8. 显示路线选项
-            this.routeCombinations = finalRoutes;
-            this.currentRouteIndex = 0;
-            
-            if (finalRoutes.length > 0) {
-                // 默认显示第一条路线
-                this.displayRoute(finalRoutes[0]);
-                this.showNotification(`已生成 ${finalRoutes.length} 条候选路线，请选择`, 'success');
+            if (this.routeCombinations.length > 0) {
+                this.switchToRoute(0);
             }
 
         } catch (error) {
-            console.error('路线规划失败:', error);
-            this.showNotification(`路线规划失败: ${error.message}`, 'error');
+            console.error('批量路线规划失败:', error);
+            let errorMessage = '路线规划失败，服务器发生未知错误。';
+            if (error.response) {
+                console.error('错误响应:', error.response.data);
+                errorMessage = (error.response.data && error.response.data.message) 
+                    ? `规划失败: ${error.response.data.message}` 
+                    : '规划失败，请检查店铺地址或网络。';
+            }
+            this.showNotification(errorMessage, 'error');
         } finally {
             this.isLoading = false;
+            this.isPlanning = false; //  <-- 添加这一行
         }
     },
 
-    // 安全的距离计算方法
     calculateDistanceSafe(lng1, lat1, lng2, lat2) {
         try {
             // 验证输入参数
@@ -2865,6 +2794,38 @@ const Dashboard = {
         } catch (error) {
             console.error('距离计算失败:', error);
             return null;
+        }
+    },
+
+    // 显示选定的路线
+    displayRoute(routeOption) {
+        if (!routeOption || !routeOption.routeData) {
+            return;
+        }
+        
+        const mapDisplay = this.$refs.mapDisplayRef;
+        if (mapDisplay) {
+            // 在地图上绘制路线
+            mapDisplay.drawOptimizedRoute(routeOption.routeData);
+        }
+        
+        // 更新路线信息显示
+        this.routeInfo = routeOption.routeData;
+        this.showRouteInfo = true;
+        this.routeSummary = {
+            totalTime: this.formatDuration(routeOption.totalTime / 60), // 转换为分钟
+            totalDistance: this.formatDistance(routeOption.totalDistance),
+            optimizationType: routeOption.optimizationType,
+            combination: routeOption.combination.map(s => s.name).join(' → ')
+        };
+    },
+
+    // 切换到指定路线
+    switchToRoute(index) {
+        if (this.routeCombinations && index >= 0 && index < this.routeCombinations.length) {
+            this.currentRouteIndex = index;
+            this.displayRoute(this.routeCombinations[index]);
+            this.showNotification(`已切换到路线 ${index + 1}`, 'info');
         }
     },
 
@@ -2948,7 +2909,7 @@ const Dashboard = {
         this.routeInfo = routeOption.routeData;
         this.showRouteInfo = true;
         this.routeSummary = {
-            totalTime: this.formatTime(routeOption.totalTime),
+            totalTime: this.formatDuration(routeOption.totalTime),
             totalDistance: this.formatDistance(routeOption.totalDistance),
             combination: routeOption.combination.map(s => s.name).join(' → ')
         };
@@ -3050,156 +3011,7 @@ const Dashboard = {
       this.shopInput = '';
     },
 
-    // 查询所有待探店铺的详细信息
-    async queryAllShopsDetails() {
-      if (this.shopsToVisit.length === 0) {
-        this.showNotification('请先添加要探访的店铺', 'warning');
-        return;
-      }
-
-      this.isLoading = true;
-      this.showNotification('正在查询店铺详细信息...', 'info');
-
-      try {
-        // 查询每个店铺的详细信息
-        const updatedShopsToVisit = [];
-        
-        for (const shop of this.shopsToVisit) {
-          const payload = {
-            keywords: shop.name,
-          };
-          
-          if (this.selectedCity) {
-            payload.city = this.selectedCity;
-          }
-          
-          if (this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude) {
-            payload.latitude = this.currentHomeLocation.latitude;
-            payload.longitude = this.currentHomeLocation.longitude;
-            payload.radius = 20000; // 20公里范围内搜索
-          }
-          
-          const response = await axios.post('/api/shops/find', payload);
-          
-          if (response.data.shops && response.data.shops.length > 0) {
-            // 计算每个店铺到家的距离
-            const actualShops = response.data.shops.map(actualShop => {
-              let distance = 0;
-              if (this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude) {
-                distance = this.calculateDistance(
-                  this.currentHomeLocation.longitude,
-                  this.currentHomeLocation.latitude,
-                  actualShop.longitude,
-                  actualShop.latitude
-                );
-              }
-              return {
-                ...actualShop,
-                distance: distance
-              };
-            });
-            
-            // 按距离排序
-            actualShops.sort((a, b) => a.distance - b.distance);
-            
-            // 更新店铺信息
-            updatedShopsToVisit.push({
-              ...shop,
-              isChainStore: actualShops.length > 1, // 根据查询结果判断是否为连锁店
-              actualShops: actualShops,
-              // 使用距离最近的店铺信息作为默认值
-              latitude: actualShops[0].latitude,
-              longitude: actualShops[0].longitude,
-              address: actualShops[0].address
-            });
-          } else {
-            // 没有找到对应的店铺，保持原状
-            updatedShopsToVisit.push(shop);
-            this.showNotification(`未找到"${shop.name}"的详细信息`, 'warning');
-          }
-        }
-        
-        // 更新店铺列表
-        this.shopsToVisit = updatedShopsToVisit;
-        
-        this.showNotification('店铺信息查询完成', 'success');
-      } catch (error) {
-        console.error('查询店铺详细信息失败:', error);
-        this.showNotification('查询店铺信息失败，请重试', 'error');
-      } finally {
-        this.isLoading = false;
-      }
-    },
-
-    // 生成所有可能的路线组合
-    generateRouteCombinations() {
-      if (this.shopsToVisit.length === 0) {
-        this.showNotification('请先添加要探访的店铺', 'warning');
-        return [];
-      }
-      
-      // 收集所有可能的实际店铺组合
-      const shopCombinations = [];
-      
-      // 先处理所有店铺，为每个店铺创建实际店铺数组
-      const shopOptions = this.shopsToVisit.map(shop => {
-        if (shop.isChainStore && shop.actualShops && shop.actualShops.length > 0) {
-          // 连锁店，使用所有找到的实际店铺
-          return shop.actualShops;
-        } else {
-          // 私人店铺或未找到详细信息，只使用单个店铺
-          return [shop];
-        }
-      });
-      
-      // 生成所有可能的组合
-      function generateCombinations(options, currentIndex, currentCombination) {
-        if (currentIndex === options.length) {
-          shopCombinations.push([...currentCombination]);
-          return;
-        }
-        
-        for (const shop of options[currentIndex]) {
-          currentCombination.push(shop);
-          generateCombinations(options, currentIndex + 1, currentCombination);
-          currentCombination.pop();
-        }
-      }
-      
-      generateCombinations(shopOptions, 0, []);
-      
-      // 为每个店铺组合生成所有可能的访问顺序（排列）
-      const routeCombinations = [];
-      
-      for (const combination of shopCombinations) {
-        const permutations = this.generatePermutations(combination);
-        routeCombinations.push(...permutations);
-      }
-      
-      console.log(`生成了${routeCombinations.length}种可能的路线组合`);
-      return routeCombinations;
-    },
-
-    // 生成排列
-    generatePermutations(shops) {
-      if (shops.length <= 1) {
-        return [shops];
-      }
-      
-      const result = [];
-      
-      for (let i = 0; i < shops.length; i++) {
-        const current = shops[i];
-        const remaining = [...shops.slice(0, i), ...shops.slice(i + 1)];
-        const remainingPermutations = this.generatePermutations(remaining);
-        
-        for (const permutation of remainingPermutations) {
-          result.push([current, ...permutation]);
-        }
-      }
-      
-      return result;
-    },
+    
 
     // 显示指定的路线
     displayRoute(routeInfo) {
@@ -3322,14 +3134,6 @@ app.use(router);
 app.mount('#app');
 
 console.log('Vue app initialized with basic routing and components.');
-
-// Note: The .vue files (Login.vue, Register.vue, Dashboard.vue, App.vue)
-// will be created next, mirroring the structure of these JavaScript component objects.
-// To use those .vue files directly, a build system (like Vite or Vue CLI) or
-// an in-browser SFC loader (like vue3-sfc-loader) would be needed.
-// The current setup uses JS object components for a no-build environment.
-// The API calls are placeholders and assume the backend is running and accessible at /api.
-// Change /api/login and /api/register to the actual backend URL if different (e.g. http://localhost:5000/login)
 
 // Add modern CSS styling
 const style = document.createElement('style');
