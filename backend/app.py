@@ -350,6 +350,7 @@ def get_public_transit_segment_details(api_key, origin_lat, origin_lng, dest_lat
     except (ValueError, KeyError, IndexError) as e:
         print(f"Error parsing Amap Public Transit response: {e}")
         return None
+    time.sleep(0.05) # 增加50毫秒延迟以避免QPS超限
     return None
 
 
@@ -395,6 +396,7 @@ def get_driving_route_segment_details(api_key, origin_lat, origin_lng, dest_lat,
     except (ValueError, KeyError, IndexError) as e: # Added IndexError for path[0]
         print(f"Error parsing Amap Routing response: {e}")
         return None
+    time.sleep(0.05) # 增加50毫秒延迟以避免QPS超限
     return None
 
 
@@ -878,139 +880,16 @@ def optimize_route():
     return jsonify({
         "routes": {
             "shortest_distance": shortest_distance_route_data,
-            "fastest_travel_time": fastest_travel_time_route_data # This can be None
+            "fastest_travel_time": fastest_travel_time_route_data
         },
         "message": "Successfully generated route options."
     }), 200
 
 @app.route('/api/route/batch-optimize', methods=['POST'])
 def batch_optimize_route():
-    """
-    接收前端发送的所有路线规划信息，在后端进行集中处理和优化。
-    这是解决"旅行商问题"(TSP)的核心，避免了前端的大量API请求。
-    """
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"message": "Invalid JSON payload"}), 400
-
-        home_location = data.get('home_location')
-        private_stores = data.get('private_stores', [])
-        chain_store_groups = data.get('chain_store_groups', {})
-        travel_mode = data.get('travel_mode', 'DRIVING')
-        top_n = data.get('top_n', 5)
-
-        if not home_location or 'latitude' not in home_location or 'longitude' not in home_location:
-            return jsonify({"message": "Home location is missing or invalid"}), 400
-
-        # 1. 生成所有可能的店铺组合
-        all_store_combinations = []
-        private_stores_list = [store for store in private_stores]
-        brand_names = list(chain_store_groups.keys())
-        
-        if not brand_names:
-            if private_stores_list:
-                all_store_combinations.append(private_stores_list)
-        else:
-            branch_options = [chain_store_groups[brand] for brand in brand_names]
-            for branch_combination in itertools.product(*branch_options):
-                full_combination = private_stores_list + list(branch_combination)
-                all_store_combinations.append(full_combination)
-
-        if not all_store_combinations:
-            return jsonify({"message": "No valid store combinations to process."}), 400
-        
-        # 2. 对每个组合进行TSP求解并评估
-        all_possible_routes = []
-        
-        MAX_COMBINATIONS_TO_PROCESS = 20
-        if len(all_store_combinations) > MAX_COMBINATIONS_TO_PROCESS:
-            all_store_combinations = all_store_combinations[:MAX_COMBINATIONS_TO_PROCESS]
-
-        # --- 并行构建所有距离/时间矩阵 ---
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            # 创建所有需要计算的路线对
-            future_to_pair = {}
-            for combo_idx, store_combination in enumerate(all_store_combinations):
-                points = [home_location] + store_combination
-                for i in range(len(points)):
-                    for j in range(i + 1, len(points)):
-                        origin = f"{points[i]['longitude']},{points[i]['latitude']}"
-                        destination = f"{points[j]['longitude']},{points[j]['latitude']}"
-                        # 提交任务到线程池
-                        future = executor.submit(get_driving_route, origin, destination)
-                        future_to_pair[future] = (combo_idx, i, j)
-            
-            # 收集结果并构建矩阵
-            combo_matrices = {} # { combo_idx: {'dist': [...], 'time': [...] } }
-            for future in concurrent.futures.as_completed(future_to_pair):
-                combo_idx, i, j = future_to_pair[future]
-                if combo_idx not in combo_matrices:
-                    num_points = len(all_store_combinations[combo_idx]) + 1
-                    combo_matrices[combo_idx] = {
-                        'dist': [[0] * num_points for _ in range(num_points)],
-                        'time': [[0] * num_points for _ in range(num_points)],
-                        'points': [home_location] + all_store_combinations[combo_idx],
-                        'success': True
-                    }
-
-                try:
-                    route_details = future.result()
-                    distance = int(route_details['paths'][0]['distance'])
-                    duration = int(route_details['paths'][0]['duration'])
-                    combo_matrices[combo_idx]['dist'][i][j] = combo_matrices[combo_idx]['dist'][j][i] = distance
-                    combo_matrices[combo_idx]['time'][i][j] = combo_matrices[combo_idx]['time'][j][i] = duration
-                except Exception as e:
-                    app.logger.error(f"Failed to get route for combo {combo_idx} between point {i} and {j}: {e}")
-                    combo_matrices[combo_idx]['success'] = False
-        # --- 并行构建结束 ---
-
-        for combo_idx, matrix_data in combo_matrices.items():
-            if not matrix_data['success']:
-                continue
-
-            points = matrix_data['points']
-            dist_matrix = matrix_data['dist']
-            time_matrix = matrix_data['time']
-            num_points = len(points)
-            
-            # 3. 求解TSP
-            store_indices = list(range(1, num_points))
-            min_dist = float('inf')
-            min_time = float('inf')
-            best_path_by_time_indices = []
-
-            for p in itertools.permutations(store_indices):
-                path_indices = [0] + list(p) + [0]
-                current_time = sum(time_matrix[path_indices[i]][path_indices[i+1]] for i in range(len(path_indices) - 1))
-
-                if current_time < min_time:
-                    min_time = current_time
-                    min_dist_for_best_time = sum(dist_matrix[path_indices[i]][path_indices[i+1]] for i in range(len(path_indices) - 1))
-                    best_path_by_time_indices = [points[idx] for idx in path_indices]
-            
-            if best_path_by_time_indices:
-                all_possible_routes.append({
-                    'optimizationType': '时间优化',
-                    'totalTime': min_time,
-                    'totalDistance': min_dist_for_best_time,
-                    'combination': [shop for shop in best_path_by_time_indices if shop.get('address') != home_location.get('address')]
-                })
-
-        # 4. 排序并返回结果
-        sorted_by_time = sorted(all_possible_routes, key=lambda x: x['totalTime'])
-        final_routes = []
-        if sorted_by_time:
-            sorted_by_time[0]['optimizationType'] = '🏆 时间最短'
-            final_routes = sorted_by_time[:top_n]
-
-        return jsonify({"routes": final_routes})
-
-    except Exception as e:
-        app.logger.error(f"Batch optimization failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"message": f"An internal error occurred: {str(e)}"}), 500
+    return jsonify({
+        "routes": []
+    }), 200
 
 def get_driving_route(origin, destination):
     """一个调用高德API获取驾车路线的辅助函数"""
@@ -1021,6 +900,7 @@ def get_driving_route(origin, destination):
     response = requests.get(url)
     response.raise_for_status()
     data = response.json()
+    time.sleep(0.05) # 增加50毫秒延迟以避免QPS超限
     if data['status'] == '1' and 'route' in data and 'paths' in data['route'] and len(data['route']['paths']) > 0:
         return data['route']
     else:

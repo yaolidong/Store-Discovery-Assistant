@@ -194,7 +194,7 @@
       </div>
 
       <button
-        @click="calculateOptimizedRoute"
+        @click="getDirections"
         :disabled="!canCalculateRoute || isCalculatingRoute || (selectedTravelMode === 'public_transit' && !homeCityName)"
         class="btn-primary btn-large"
       >
@@ -204,23 +204,39 @@
         Please set your home location, confirm at least one shop, and specify city if using transit, to enable route calculation.
       </p>
 
-      <div v-if="optimizedRouteData" class="optimized-route-details">
-        <h4>Optimized Itinerary:</h4>
-        <p>
-          <strong>Total Distance:</strong> {{ (optimizedRouteData.total_distance / 1000).toFixed(2) }} km<br>
-          <strong>Total Duration:</strong> {{ Math.round(optimizedRouteData.total_duration / 60) }} minutes
-        </p>
-        <h5>Route:</h5>
-        <ul class="route-steps-list">
-          <li v-for="(point, index) in optimizedRouteData.optimized_order" :key="point.id + '-' + index" class="route-step">
-            <strong>{{ index + 1 }}. {{ point.name }}</strong>
-            <div v-if="index < optimizedRouteData.route_segments.length" class="segment-details">
-              &nbsp;&nbsp;&nbsp;&nbsp;⇩ To {{ optimizedRouteData.route_segments[index].to_name }}:
-              {{ (optimizedRouteData.route_segments[index].distance / 1000).toFixed(2) }} km,
-              {{ Math.round(optimizedRouteData.route_segments[index].duration / 60) }} min
-            </div>
-          </li>
-        </ul>
+      <!-- Results Display: Two Columns for Time vs Distance -->
+      <div v-if="routeByTime || routeByDistance" class="route-results-container">
+        <!-- Time Optimized Route -->
+        <div v-if="routeByTime" class="route-option-card">
+          <h4>🏆 时间最短路线</h4>
+          <p>
+            <strong>总时长:</strong> {{ Math.round(routeByTime.total_overall_duration / 60) }} 分钟<br>
+            <strong>总距离:</strong> {{ (routeByTime.total_distance / 1000).toFixed(2) }} 公里
+          </p>
+          <h5>路线顺序:</h5>
+          <ul class="route-steps-list">
+            <li v-for="(point, index) in routeByTime.optimized_order" :key="point.id + '-' + index" class="route-step">
+              <strong>{{ index === 0 ? '出发' : index }}. {{ point.name }}</strong>
+            </li>
+          </ul>
+          <button @click="displayRouteOnMap(routeByTime)" class="btn-secondary">在地图上显示此路线</button>
+        </div>
+
+        <!-- Distance Optimized Route -->
+        <div v-if="routeByDistance" class="route-option-card">
+          <h4>📏 距离最短路线</h4>
+          <p>
+            <strong>总距离:</strong> {{ (routeByDistance.total_distance / 1000).toFixed(2) }} 公里<br>
+            <strong>总时长:</strong> {{ Math.round(routeByDistance.total_overall_duration / 60) }} 分钟
+          </p>
+          <h5>路线顺序:</h5>
+          <ul class="route-steps-list">
+            <li v-for="(point, index) in routeByDistance.optimized_order" :key="point.id + '-' + index" class="route-step">
+              <strong>{{ index === 0 ? '出发' : index }}. {{ point.name }}</strong>
+            </li>
+          </ul>
+          <button @click="displayRouteOnMap(routeByDistance)" class="btn-secondary">在地图上显示此路线</button>
+        </div>
       </div>
     </div>
 
@@ -254,11 +270,6 @@
 
     <hr class="separator"/>
 
-    <div>
-      <input type="text" v-model="storeAddress" placeholder="Store Location (for manual directions)" />
-    </div>
-    <button @click="getDirections" class="directions-button">Get Directions</button>
-    <!-- Map display for both directions and picking -->
     <map-display
       v-if="showMap"
       ref="mapDisplay"
@@ -269,7 +280,6 @@
     <button @click="logoutUser" class="logout-button">Logout</button>
   </div>
 </template>
-
 <script>
 import MapDisplay from './MapDisplay.vue';
 import axios from 'axios';
@@ -281,73 +291,44 @@ export default {
   },
   data() {
     return {
-      // 界面状态
+      // UI Status
       isLoading: false,
-      notificationMessage: '',
-      notificationType: 'info',
-      notificationDuration: 3000,
-      
-      // 地图相关
+      isCalculatingRoute: false,
+
+      // Map
       mapDisplayRef: null,
-      isPickModeActive: false,
+      mapPickModeEnabled: false,
       
-      // 城市和家庭位置
-      cities: [],
+      // City & Home Location
       selectedCity: '',
       currentHomeLocation: null,
-      homeAddress: '',
       homeAddressInput: '',
       homeLatitudeInput: '',
       homeLongitudeInput: '',
       showAddressSuggestions: false,
       addressSuggestions: [],
       
-      // 店铺搜索
+      // Shop Search
       shopInput: '',
       shopSuggestions: [],
       showShopSuggestions: false,
+      isLoadingShops: false,
+      searchResults: [],
+      selectedShopForSearch: {id: null, name: ''},
       
-      // 探店列表
+      // Shops to Visit List
       shopsToVisit: [],
       
-      // 路线规划
-      travelMode: 'DRIVING',
-      routeInfo: null,
-      showRouteInfo: false,
-      routeSummary: null,
-      departureTime: '09:00:00', // 默认出发时间
-      defaultStayDuration: 30, // 默认停留时间（分钟）
+      // Route Planning
+      selectedTravelMode: 'driving',
+      homeCityName: '', 
       
-      // 多路线组合
-      routeCombinations: [], // 所有可能的路线组合
-      currentRouteIndex: 0, // 当前显示的路线索引
-      currentRouteShops: [], // 当前路线包含的店铺
-
-      // Shops to visit
-      shopInput: '',
-      shopsToVisit: [], // Array of { id: Date.now(), name: 'Shop Name', address?, lat?, lon?, status? }
-
-      // Shop Search & Disambiguation
-      searchResults: [], // Stores results from /api/shops/find
-      selectedShopForSearch: { id: null, name: '' }, // Shop from shopsToVisit being searched
-      isLoadingShops: false, // Loading indicator for shop search
-
-      // Optimized Route
-      optimizedRouteData: null, // Stores response from /api/route/optimize
-      isCalculatingRoute: false, // Loading indicator for route calculation
-      selectedTravelMode: 'driving', // 'driving' or 'public_transit'
-      homeCityName: '', // Placeholder for city name/code for transit.
-
-      // Schedule Display
-      defaultStartTime: '09:00:00', // e.g., 9 AM
-      displayableSchedule: null, // Array of schedule items
-
-      // New properties for address suggestions
-      showAddressSuggestions: false,
-      addressSuggestions: [],
-      showShopSuggestions: false,
-      shopSuggestions: [],
-      selectedCity: '',
+      // Optimized Route Data & Schedule
+      routeByTime: null,
+      routeByDistance: null,
+      displayableSchedule: null,
+      defaultStartTime: '09:00:00',
+      showMap: false,
     };
   },
   computed: {
@@ -355,41 +336,23 @@ export default {
       return this.mapPickModeEnabled ? 'Cancel Picking on Map' : 'Pick Home on Map';
     },
     canCalculateRoute() {
-      // Check if home location is set and there's at least one confirmed shop
       const homeSet = this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude;
       const confirmedShopsExist = this.shopsToVisit.some(shop => shop.status === 'confirmed');
       return homeSet && confirmedShopsExist;
     }
   },
   methods: {
-    // 通知方法
-    showNotification(message, type = 'info', title = '') {
-      if (this.$refs.notification) {
-        if (type === 'success') {
-          this.$refs.notification.success(message, title);
-        } else if (type === 'error') {
-          this.$refs.notification.error(message, title);
-        } else if (type === 'warning') {
-          this.$refs.notification.warning(message, title);
-        } else {
-          this.$refs.notification.info(message, title);
-        }
-      }
-    },
     async fetchHomeLocation() {
       try {
-        const response = await axios.get('/api/user/home'); // Assumes cookie-based auth
+        const response = await axios.get('/api/user/home');
         this.currentHomeLocation = response.data;
-        // Pre-fill input fields if needed, or keep them separate
         this.homeAddressInput = response.data.home_address || '';
         this.homeLatitudeInput = response.data.home_latitude || '';
         this.homeLongitudeInput = response.data.home_longitude || '';
       } catch (error) {
         console.error('Error fetching home location:', error);
-        // Handle error (e.g., show a message to the user)
         if (error.response && error.response.status === 401) {
-          // Unauthorized, perhaps redirect to login or show a message
-          alert('Session expired or not authenticated. Please login again.');
+          alert('Session expired. Please login again.');
           this.$router.push('/login');
         }
       }
@@ -401,83 +364,54 @@ export default {
           latitude: this.homeLatitudeInput ? parseFloat(this.homeLatitudeInput) : null,
           longitude: this.homeLongitudeInput ? parseFloat(this.homeLongitudeInput) : null,
         };
-        // Filter out null latitude/longitude if empty strings before sending
-        if (this.homeLatitudeInput === '') payload.latitude = null;
-        if (this.homeLongitudeInput === '') payload.longitude = null;
-
-
-        const response = await axios.post('/api/user/home', payload); // Assumes cookie-based auth
-        this.currentHomeLocation = { // Update current home location display
-            address: payload.address,
-            latitude: payload.latitude,
-            longitude: payload.longitude
-        };
+        const response = await axios.post('/api/user/home', payload);
+        this.currentHomeLocation = response.data; // Update with response from server
         alert(response.data.message || 'Home location updated successfully!');
-        this.fetchHomeLocation(); // Re-fetch to confirm and get any backend-processed values
       } catch (error) {
         console.error('Error saving home location:', error);
         alert('Failed to save home location. ' + (error.response?.data?.message || ''));
       }
     },
     pickHomeOnMap() {
+      this.mapPickModeEnabled = !this.mapPickModeEnabled;
       if (this.mapPickModeEnabled) {
-        // If already in pick mode, cancel it
-        this.mapPickModeEnabled = false;
-        // Optionally, hide the map if it was only shown for picking
-        // For now, let's assume the map might be used for other things too (like getDirections)
-        // so we don't automatically hide it unless specifically designed.
-      } else {
-        // Enter pick mode
-        this.mapPickModeEnabled = true;
-        this.showMap = true; // Ensure map is visible for picking
-        alert('Map picking mode activated. Click on the map to select your home location.');
+          this.showMap = true;
+          alert('Map picking mode activated. Click on the map to select your home location.');
       }
     },
     handleLocationPicked(locationData) {
       this.homeAddressInput = locationData.address;
       this.homeLatitudeInput = locationData.latitude.toString();
       this.homeLongitudeInput = locationData.longitude.toString();
-      this.mapPickModeEnabled = false; // Deactivate pick mode
+      this.mapPickModeEnabled = false;
       alert(`Location picked: ${locationData.address}. Review and click "Set Home Location" to save.`);
-      // Optionally, you could scroll to the form or highlight the save button.
     },
-    getDirections() { // Existing method
-      // Note: The original homeAddress model is now homeAddressInput or part of currentHomeLocation
-      console.log('Home Address for directions:', this.currentHomeLocation.address || this.homeAddressInput);
-      console.log('Store Address:', this.storeAddress);
-      this.showMap = true; // Ensure map is visible for directions
-      this.mapPickModeEnabled = false; // Ensure pick mode is off if directions are requested
-    },
-    logoutUser() { // Existing method
+    logoutUser() {
       localStorage.removeItem('userToken');
       alert('You have been logged out.');
       this.$router.push('/login');
     },
-    // Methods for Shops to Visit
     addShop() {
-      if (this.shopInput.trim() !== '') {
-        // 如果有建议且输入框内容与第一个建议匹配，直接选择
-        if (this.shopSuggestions.length > 0) {
-          const firstSuggestion = this.shopSuggestions[0];
-          if (firstSuggestion.name.toLowerCase().includes(this.shopInput.toLowerCase())) {
-            this.selectShopSuggestion(firstSuggestion);
-            return;
-          }
-        }
-        
-        // 否则按原来的方式添加（需要后续搜索确认）
-        this.shopsToVisit.push({
-          id: Date.now(),
-          name: this.shopInput.trim(),
-        });
-        this.shopInput = '';
-      } else {
+      if (!this.shopInput.trim()) {
         alert('请输入店铺名称。');
+        return;
+      }
+      const newShop = {
+        id: Date.now(),
+        name: this.shopInput.trim(),
+        status: 'pending_confirmation' 
+      };
+      // If a suggestion matches, add it directly as confirmed
+      const matchingSuggestion = this.shopSuggestions.find(s => s.name.toLowerCase() === this.shopInput.trim().toLowerCase());
+      if (matchingSuggestion) {
+        this.selectShopSuggestion(matchingSuggestion);
+      } else {
+        this.shopsToVisit.push(newShop);
+        this.shopInput = '';
       }
     },
     removeShop(shopId) {
       this.shopsToVisit = this.shopsToVisit.filter(shop => shop.id !== shopId);
-      // If the shop being removed was the one selected for search, clear search results
       if (this.selectedShopForSearch && this.selectedShopForSearch.id === shopId) {
         this.searchResults = [];
         this.selectedShopForSearch = { id: null, name: '' };
@@ -486,36 +420,24 @@ export default {
     async findShopOnMap(shop) {
       this.isLoadingShops = true;
       this.selectedShopForSearch = shop;
-      this.searchResults = []; // Clear previous results
-
+      this.searchResults = [];
       const payload = {
         keywords: shop.name,
+        city: this.selectedCity || '',
       };
-
-      if (this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude) {
+      if (this.currentHomeLocation?.latitude) {
         payload.latitude = this.currentHomeLocation.latitude;
         payload.longitude = this.currentHomeLocation.longitude;
-        // payload.radius = 10000; // Optional: backend has a default
       }
-      // Optionally, add city if available from user input or home location (requires parsing city from home_address or a separate field)
-      // payload.city = this.currentHomeLocation.city; // Example
-
       try {
         const response = await axios.post('/api/shops/find', payload);
-        if (response.data.shops && response.data.shops.length > 0) {
-          this.searchResults = response.data.shops;
-        } else {
-          alert(`No shops found for "${shop.name}". You can try a different name or add details manually.`);
-          this.searchResults = []; // Ensure it's empty
+        this.searchResults = response.data.shops || [];
+        if (this.searchResults.length === 0) {
+          alert(`No shops found for "${shop.name}".`);
         }
       } catch (error) {
         console.error('Error searching for shops:', error);
-        let errorMessage = `Error searching for shops for "${shop.name}".`;
-        if (error.response && error.response.data && error.response.data.message) {
-          errorMessage += ` ${error.response.data.message}`;
-        }
-        alert(errorMessage);
-        this.searchResults = []; // Ensure it's empty on error
+        alert(`Error searching for shops: ` + (error.response?.data?.message || 'Unknown error'));
       } finally {
         this.isLoadingShops = false;
       }
@@ -523,65 +445,57 @@ export default {
     confirmShopSelection(selectedCandidate) {
       const shopIndex = this.shopsToVisit.findIndex(s => s.id === this.selectedShopForSearch.id);
       if (shopIndex !== -1) {
-        // Create a new object for reactivity if shopsToVisit items are complex
-        // or directly update if simple and Vue detects changes.
-        // For safety and reactivity, creating a new object or using Vue.set for new properties is good.
         const updatedShop = {
-          ...this.shopsToVisit[shopIndex], // Keep original id and any other properties
-          name: selectedCandidate.name,    // Amap might return a more formal name
+          ...this.shopsToVisit[shopIndex],
+          name: selectedCandidate.name,
           address: selectedCandidate.address,
           latitude: selectedCandidate.latitude,
           longitude: selectedCandidate.longitude,
           status: 'confirmed',
-          amap_id: selectedCandidate.id, // Store Amap POI ID if needed
-          stayDurationMinutes: 0 // Initialize stay duration
+          amap_id: selectedCandidate.id,
+          stayDurationMinutes: 30
         };
-        this.shopsToVisit.splice(shopIndex, 1, updatedShop); // Replace item reactively
-
-        alert(`Shop "${updatedShop.name}" confirmed with address: ${updatedShop.address}.`);
-      } else {
-        alert("Error: Could not find the original shop in your list to update.");
+        this.shopsToVisit.splice(shopIndex, 1, updatedShop);
       }
-      // Clear search state
       this.searchResults = [];
       this.selectedShopForSearch = { id: null, name: '' };
     },
-    async calculateOptimizedRoute() {
-      if (!this.canCalculateRoute) {
-        alert("Please set your home location and confirm at least one shop before calculating the route.");
+    displayRouteOnMap(routeData) {
+      if (!routeData) {
+        console.warn("No route data to display on map.");
         return;
       }
+      this.displayableSchedule = this.generateDisplaySchedule(routeData);
+      this.showMap = true;
+      this.$nextTick(() => {
+          if (this.$refs.mapDisplay) {
+              this.$refs.mapDisplay.drawOptimizedRoute(routeData);
+          } else {
+              console.warn("MapDisplay component ref not available.");
+          }
+      });
+    },
+    getDirections() {
+      if (this.isCalculatingRoute || !this.canCalculateRoute) return;
 
       this.isCalculatingRoute = true;
-      this.optimizedRouteData = null; // Clear previous route data
-      this.displayableSchedule = null; // Clear previous schedule
-      if (this.$refs.mapDisplay) { // Clear previous route from map
+      this.routeByTime = null;
+      this.routeByDistance = null;
+      this.displayableSchedule = null;
+      if (this.$refs.mapDisplay) {
          this.$refs.mapDisplay.clearMapElements();
       }
 
-
       const confirmedShops = this.shopsToVisit
         .filter(shop => shop.status === 'confirmed')
-        .map(shop => {
-          const shopPayload = {
-            id: shop.id, // Keep original client-side ID for reference if needed
+        .map(shop => ({
+            id: shop.id,
             name: shop.name,
             latitude: shop.latitude,
             longitude: shop.longitude,
-            amap_id: shop.amap_id // Include Amap ID if available and useful for backend
-          };
-          // Add stay_duration in seconds if stayDurationMinutes is positive
-          if (shop.stayDurationMinutes && shop.stayDurationMinutes > 0) {
-            shopPayload.stay_duration = shop.stayDurationMinutes * 60;
-          }
-          return shopPayload;
-        });
-
-      if (confirmedShops.length === 0) {
-          alert("No shops have been confirmed with a location yet. Please search and select shops first.");
-          this.isCalculatingRoute = false;
-          return;
-      }
+            amap_id: shop.amap_id,
+            stay_duration: (shop.stayDurationMinutes || 0) * 60
+        }));
 
       const payload = {
         home_location: {
@@ -589,60 +503,36 @@ export default {
           longitude: this.currentHomeLocation.longitude,
         },
         shops: confirmedShops,
-        // mode: "driving" // Default in backend, can be added if mode selection is implemented
+        mode: this.selectedTravelMode,
+        city: this.selectedTravelMode === 'public_transit' ? this.homeCityName.trim() : this.selectedCity
       };
-
-      // Add mode and city if public transit
-      payload.mode = this.selectedTravelMode;
-      if (this.selectedTravelMode === 'public_transit') {
-        if (!this.homeCityName.trim()) {
-          alert("Please provide the city name for public transit calculations.");
-          this.isCalculatingRoute = false;
-          return;
-        }
-        payload.city = this.homeCityName.trim();
-      }
-
-      try {
-        const response = await axios.post('/api/route/optimize', payload);
-        this.optimizedRouteData = response.data;
-        if (this.optimizedRouteData) {
-          this.displayableSchedule = this.generateDisplaySchedule(this.optimizedRouteData);
-          if (this.$refs.mapDisplay) {
-            this.showMap = true; // Ensure map is visible
-            this.$refs.mapDisplay.drawOptimizedRoute(this.optimizedRouteData);
+      
+      axios.post('/api/route/optimize', payload)
+        .then(response => {
+          this.routeByTime = response.data.routes?.fastest_travel_time || null;
+          this.routeByDistance = response.data.routes?.shortest_distance || null;
+          if (this.routeByTime || this.routeByDistance) {
+            this.displayRouteOnMap(this.routeByTime || this.routeByDistance);
           } else {
-            console.warn("MapDisplay component not available via ref to draw route.");
+            alert("No valid routes found.");
           }
-        } else {
-            alert("Route calculation did not return any data, though the request was successful.");
-            this.displayableSchedule = null; // Ensure schedule is cleared if route data is unexpectedly null
-        }
-
-      } catch (error) {
-        console.error('Error calculating optimized route:', error);
-        let errorMessage = "Error calculating optimized route.";
-        if (error.response && error.response.data && error.response.data.message) {
-          errorMessage += ` ${error.response.data.message}`;
-        }
-        alert(errorMessage);
-        this.optimizedRouteData = null; // Clear data on error
-        this.displayableSchedule = null; // Clear schedule on error
-      } finally {
-        this.isCalculatingRoute = false;
-      }
+        })
+        .catch(error => {
+          console.error('Error calculating optimized route:', error);
+          alert('Error calculating route: ' + (error.response?.data?.message || 'Server error'));
+        })
+        .finally(() => {
+          this.isCalculatingRoute = false;
+        });
     },
     generateDisplaySchedule(routeData) {
-      if (!routeData || !routeData.optimized_order || !routeData.route_segments) {
-        return [];
-      }
+      if (!routeData || !routeData.optimized_order || !routeData.route_segments) return [];
 
       const displayScheduleItems = [];
       let scheduleTime = new Date();
       const [hours, minutes, seconds] = this.defaultStartTime.split(':').map(Number);
       scheduleTime.setHours(hours, minutes, seconds, 0);
 
-      // First item is Home departure
       if (routeData.optimized_order.length > 0 && routeData.optimized_order[0].name === "Home") {
         displayScheduleItems.push({
           type: 'departure',
@@ -654,13 +544,8 @@ export default {
       for (let i = 0; i < routeData.route_segments.length; i++) {
         const segment = routeData.route_segments[i];
         const travelDurationSeconds = segment.duration;
-        // const fromLocationName = segment.from_name; // Not directly used in item creation for this loop
         const toLocationName = segment.to_name;
-        const toLocationId = segment.to_id; // This is the original client-side ID
-
-        // Add travel time to current scheduleTime
         scheduleTime.setSeconds(scheduleTime.getSeconds() + travelDurationSeconds);
-
         displayScheduleItems.push({
           type: 'arrival',
           location: toLocationName,
@@ -668,158 +553,94 @@ export default {
           travel_duration_seconds: travelDurationSeconds
         });
 
-        // Handle stay duration if it's a shop (not Home)
-        // The last segment brings us back home, so toLocationName could be "Home"
         if (toLocationName !== "Home") {
-          // The toLocation for segment `i` is `routeData.optimized_order[i+1]`
           const currentRoutePoint = routeData.optimized_order[i+1];
-          const stayDurationSeconds = currentRoutePoint.stay_duration || 0; // Already in seconds from backend
-
+          const stayDurationSeconds = currentRoutePoint.stay_duration || 0;
           if (stayDurationSeconds > 0) {
-            displayScheduleItems.push({
-              type: 'stay',
-              location: toLocationName, // or currentRoutePoint.name
-              duration_seconds: stayDurationSeconds
-            });
-
-            // Add stay time to current scheduleTime
+            displayScheduleItems.push({ type: 'stay', location: toLocationName, duration_seconds: stayDurationSeconds });
             scheduleTime.setSeconds(scheduleTime.getSeconds() + stayDurationSeconds);
-
-            // Add departure from this shop
-            displayScheduleItems.push({
-              type: 'departure',
-              location: toLocationName, // or currentRoutePoint.name
-              time: new Date(scheduleTime.getTime())
-            });
-          } else { // No stay duration or stay_duration is 0
-            // If no stay, departure is immediate (same time as arrival).
-            displayScheduleItems.push({
-              type: 'departure',
-              location: toLocationName, // or currentRoutePoint.name
-              time: new Date(scheduleTime.getTime()) // Same as arrival time
-            });
           }
+          displayScheduleItems.push({ type: 'departure', location: toLocationName, time: new Date(scheduleTime.getTime())});
         }
       }
       return displayScheduleItems;
     },
     formatTime(dateObject) {
-      if (!dateObject || !(dateObject instanceof Date)) return '';
+      if (!(dateObject instanceof Date)) return '';
       return dateObject.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     },
     formatDuration(totalSeconds) {
-      if (totalSeconds === undefined || totalSeconds === null || totalSeconds < 0) return 'N/A';
-      const minutes = Math.round(totalSeconds / 60);
-      return `${minutes}`; // Template will add " min"
+      return `${Math.round(totalSeconds / 60)}`;
     },
     async onAddressInput() {
       if (this.homeAddressInput.trim().length < 2) {
         this.addressSuggestions = [];
         return;
       }
-      
       try {
-        const payload = {
-          keywords: this.homeAddressInput.trim(),
-        };
-        
-        if (this.selectedCity) {
-          payload.city = this.selectedCity;
-        }
-        
+        const payload = { keywords: this.homeAddressInput.trim(), city: this.selectedCity };
         const response = await axios.post('/api/shops/find', payload);
-        if (response.data.shops && response.data.shops.length > 0) {
-          this.addressSuggestions = response.data.shops.slice(0, 5); // 限制显示5个建议
-        } else {
-          this.addressSuggestions = [];
-        }
+        this.addressSuggestions = response.data.shops?.slice(0, 5) || [];
       } catch (error) {
         console.error('Error fetching address suggestions:', error);
         this.addressSuggestions = [];
       }
     },
     hideAddressSuggestions() {
-      setTimeout(() => {
-        this.showAddressSuggestions = false;
-      }, 200); // 延迟隐藏，让点击事件先执行
+      setTimeout(() => { this.showAddressSuggestions = false; }, 200);
     },
     selectAddressSuggestion(suggestion) {
       this.homeAddressInput = suggestion.address || suggestion.name;
-      this.homeLatitudeInput = suggestion.latitude ? suggestion.latitude.toString() : '';
-      this.homeLongitudeInput = suggestion.longitude ? suggestion.longitude.toString() : '';
+      this.homeLatitudeInput = suggestion.latitude?.toString() || '';
+      this.homeLongitudeInput = suggestion.longitude?.toString() || '';
       this.showAddressSuggestions = false;
-      this.addressSuggestions = [];
     },
     async onShopInput() {
       if (this.shopInput.trim().length < 2) {
         this.shopSuggestions = [];
         return;
       }
-      
       try {
         const payload = {
           keywords: this.shopInput.trim(),
+          city: this.selectedCity,
         };
-        
-        if (this.selectedCity) {
-          payload.city = this.selectedCity;
+        if(this.currentHomeLocation?.latitude) {
+            payload.latitude = this.currentHomeLocation.latitude;
+            payload.longitude = this.currentHomeLocation.longitude;
+            payload.radius = 20000;
         }
-        
-        if (this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude) {
-          payload.latitude = this.currentHomeLocation.latitude;
-          payload.longitude = this.currentHomeLocation.longitude;
-          payload.radius = 20000; // 20公里范围内搜索
-        }
-        
         const response = await axios.post('/api/shops/find', payload);
-        if (response.data.shops && response.data.shops.length > 0) {
-          this.shopSuggestions = response.data.shops.slice(0, 8); // 限制显示8个建议
-        } else {
-          this.shopSuggestions = [];
-        }
+        this.shopSuggestions = response.data.shops?.slice(0, 8) || [];
       } catch (error) {
         console.error('Error fetching shop suggestions:', error);
         this.shopSuggestions = [];
       }
     },
     hideShopSuggestions() {
-      setTimeout(() => {
-        this.showShopSuggestions = false;
-      }, 200); // 延迟隐藏，让点击事件先执行
+      setTimeout(() => { this.showShopSuggestions = false; }, 200);
     },
     selectShopSuggestion(suggestion) {
-      // 直接添加选中的店铺到列表
       const newShop = {
-        id: Date.now(),
+        id: suggestion.id || Date.now(),
         name: suggestion.name,
         address: suggestion.address,
         latitude: suggestion.latitude,
         longitude: suggestion.longitude,
         status: 'confirmed',
         amap_id: suggestion.id,
-        stayDurationMinutes: 30 // 默认停留30分钟
+        stayDurationMinutes: 30
       };
-      
       this.shopsToVisit.push(newShop);
-      this.shopInput = ''; // 清空输入框
+      this.shopInput = '';
       this.showShopSuggestions = false;
-      this.shopSuggestions = [];
-      
-      alert(`店铺 "${newShop.name}" 已添加到您的探店列表！`);
     },
     onCityChange() {
       if (this.selectedCity) {
         localStorage.setItem('selectedCity', this.selectedCity);
-        // 如果地图组件已经初始化，更新地图中心
-        if (this.$refs.mapDisplayRef) {
-          const cityCoordinates = this.getCityCoordinates(this.selectedCity);
-          if (cityCoordinates) {
-            this.$refs.mapDisplayRef.setCenterToCity(
-              cityCoordinates.longitude,
-              cityCoordinates.latitude,
-              this.selectedCity
-            );
-          }
+        if (this.$refs.mapDisplay) {
+          const coords = this.getCityCoordinates(this.selectedCity);
+          if (coords) this.$refs.mapDisplay.setCenterToCity(coords.longitude, coords.latitude);
         }
       }
     },
@@ -842,29 +663,20 @@ export default {
     },
   },
   created() {
-    // 从本地存储加载保存的城市选择
     const savedCity = localStorage.getItem('selectedCity');
-    if (savedCity) {
-      this.selectedCity = savedCity;
-    }
+    if (savedCity) this.selectedCity = savedCity;
   },
   mounted() {
     this.fetchHomeLocation();
-    // Original mounted content:
-    // if (!localStorage.getItem('userToken')) {
-    //   this.$router.push('/login');
-    // }
   }
 };
 </script>
-
 <style scoped>
 /* Add styling for .map-display-component if needed, e.g., margin */
 .map-display-component {
   margin-top: 20px;
   margin-bottom: 20px;
 }
-
 .route-optimization-section {
   background-color: #fff;
   padding: 20px;
@@ -886,7 +698,6 @@ export default {
   color: #dc3545;
   font-size: 0.85em;
 }
-
 .btn-large {
   padding: 12px 24px;
   font-size: 1.1em;
@@ -929,8 +740,6 @@ export default {
   color: #333;
   padding-left: 10px; /* Indent segment details */
 }
-
-
 .loading-shops-indicator {
   margin-top: 15px;
   padding: 10px;
@@ -940,7 +749,6 @@ export default {
   text-align: center;
   font-style: italic;
 }
-
 .search-results-section {
   margin-top: 20px;
   padding: 15px;
@@ -955,7 +763,7 @@ export default {
 .search-results-list {
   list-style: none;
   padding: 0;
-  max-height: 300px; /* Limit height and make scrollable if too many results */
+  max-height: 300px;
   overflow-y: auto;
   margin-bottom: 15px;
 }
@@ -969,15 +777,13 @@ export default {
 .search-result-item:last-child {
   border-bottom: none;
 }
-.search-result-item div { /* Container for name and address */
+.search-result-item div {
   flex-grow: 1;
   margin-right: 10px;
 }
 .search-result-item small {
   color: #555;
 }
-
-
 .shops-to-visit-section {
   background-color: #fff;
   padding: 20px;
@@ -985,9 +791,8 @@ export default {
   margin-bottom: 25px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.03);
 }
-
 .add-shop-form .form-group {
-  margin-bottom: 10px; /* Smaller margin for tighter layout */
+  margin-bottom: 10px;
 }
 .add-shop-form label {
   display: block;
@@ -995,32 +800,27 @@ export default {
   font-weight: bold;
 }
 .add-shop-form input[type="text"] {
-  /* Using global style, but can be overridden */
-  margin-bottom: 10px; /* Ensure space before button if it wraps */
+  margin-bottom: 10px;
 }
-/* AddShop button is btn-primary, already styled */
-
 .shops-list {
   list-style: none;
   padding: 0;
   margin-top: 20px;
 }
-
 .shop-item {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start; /* Align items to the top */
+  align-items: flex-start;
   padding: 10px;
   border: 1px solid #eee;
   border-radius: 4px;
   margin-bottom: 8px;
   background-color: #fdfdfd;
 }
-
 .shop-info {
   flex-grow: 1;
   display: flex;
-  flex-direction: column; /* Stack shop name, address, and stay duration input vertically */
+  flex-direction: column;
 }
 .shop-name {
   font-weight: bold;
@@ -1029,12 +829,12 @@ export default {
 .shop-address-confirmed {
   font-size: 0.9em;
   color: #555;
-  margin-bottom: 5px; /* Space before stay duration input */
+  margin-bottom: 5px;
 }
 .shop-stay-duration {
   display: flex;
   align-items: center;
-  margin-top: 5px; /* Space above the stay duration input */
+  margin-top: 5px;
 }
 .stay-duration-label {
   font-size: 0.85em;
@@ -1042,24 +842,20 @@ export default {
   color: #333;
 }
 .stay-duration-input {
-  width: 70px; /* Adjust width as needed */
+  width: 70px;
   padding: 4px 6px;
   font-size: 0.9em;
   border: 1px solid #ccc;
   border-radius: 3px;
 }
-
-
 .shop-item-actions button {
   margin-left: 8px;
-  align-self: flex-start; /* Align buttons to the top of their container if shop-info grows tall */
+  align-self: flex-start;
 }
-
 .btn-small {
   padding: 5px 10px;
   font-size: 0.9em;
 }
-
 .btn-info {
   background-color: #17a2b8;
   color: white;
@@ -1067,7 +863,6 @@ export default {
 .btn-info:hover {
   background-color: #117a8b;
 }
-
 .btn-success {
   background-color: #28a745;
   color: white;
@@ -1075,28 +870,24 @@ export default {
 .btn-success:hover {
   background-color: #1e7e34;
 }
-/* btn-danger is already styled */
-
 .no-shops-message {
   color: #777;
   font-style: italic;
   text-align: center;
   margin-top: 15px;
 }
-
-
 .dashboard-container {
-  max-width: 800px; /* Increased width for more content */
-  margin: 30px auto; /* Reduced top margin */
+  max-width: 800px;
+  margin: 30px auto;
   padding: 25px;
-  text-align: left; /* Align text to left for forms */
+  text-align: left;
   background-color: #f9f9f9;
   border: 1px solid #eee;
   border-radius: 8px;
   box-shadow: 0 2px 5px rgba(0,0,0,0.05);
 }
 h2 {
-  text-align: center; /* Center main heading */
+  text-align: center;
   color: #333;
   margin-bottom: 25px;
 }
@@ -1110,7 +901,6 @@ p {
   line-height: 1.6;
   margin-bottom: 10px;
 }
-
 .home-location-section {
   background-color: #fff;
   padding: 20px;
@@ -1118,7 +908,6 @@ p {
   margin-bottom: 25px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.03);
 }
-
 .current-home-display {
   padding: 10px;
   background-color: #eef7ff;
@@ -1127,36 +916,31 @@ p {
   margin-bottom: 15px;
   font-style: italic;
 }
-
 .home-form .form-group {
   margin-bottom: 15px;
 }
-
 .home-form label {
   display: block;
   margin-bottom: 5px;
   font-weight: bold;
   color: #333;
 }
-
 .home-form input[type="text"] {
-  width: calc(100% - 22px); /* Adjust width for padding and border */
+  width: calc(100% - 22px);
   padding: 10px;
   border: 1px solid #ccc;
   border-radius: 4px;
   box-sizing: border-box;
 }
-
-.btn-primary, .btn-secondary, .directions-button, .logout-button {
+.btn-primary, .btn-secondary, .logout-button {
   padding: 10px 18px;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   font-size: 16px;
-  margin-right: 10px; /* Spacing between buttons */
-  margin-top: 10px; /* Spacing above buttons */
+  margin-right: 10px;
+  margin-top: 10px;
 }
-
 .btn-primary {
   background-color: #007bff;
   color: white;
@@ -1164,7 +948,6 @@ p {
 .btn-primary:hover {
   background-color: #0056b3;
 }
-
 .btn-secondary {
   background-color: #6c757d;
   color: white;
@@ -1172,7 +955,6 @@ p {
 .btn-secondary:hover {
   background-color: #545b62;
 }
-
 .btn-danger {
   background-color: #dc3545;
   color: white;
@@ -1180,15 +962,6 @@ p {
 .btn-danger:hover {
   background-color: #c82333;
 }
-
-.directions-button {
-  background-color: #28a745; /* Green */
-  color: white;
-}
-.directions-button:hover {
-  background-color: #1e7e34;
-}
-
 .logout-button {
   margin-top: 20px;
   padding: 10px 20px;
@@ -1202,27 +975,22 @@ p {
 .logout-button:hover {
   background-color: #c9302c;
 }
-
 .separator {
   margin-top: 30px;
   margin-bottom: 30px;
   border: 0;
   border-top: 1px solid #eee;
 }
-
-/* Ensure existing styles for other elements are not negatively impacted */
-input[type="text"] { /* More general styling for text inputs */
+input[type="text"] {
   width: calc(100% - 22px);
   padding: 10px;
   border: 1px solid #ccc;
   border-radius: 4px;
   box-sizing: border-box;
-  margin-bottom: 10px; /* Add some space below inputs */
+  margin-bottom: 10px;
 }
-
-/* Styles for Schedule Display */
 .schedule-display-section {
-  background-color: #f0f8ff; /* AliceBlue, a very light blue */
+  background-color: #f0f8ff;
   padding: 20px;
   border-radius: 6px;
   margin-bottom: 25px;
@@ -1240,7 +1008,7 @@ input[type="text"] { /* More general styling for text inputs */
 }
 .schedule-item {
   padding: 8px 0;
-  border-bottom: 1px dashed #cce0ff; /* Light blue dashed border */
+  border-bottom: 1px dashed #cce0ff;
 }
 .schedule-item:last-child {
   border-bottom: none;
@@ -1251,24 +1019,22 @@ input[type="text"] { /* More general styling for text inputs */
 }
 .event-time {
   font-weight: bold;
-  color: #0056b3; /* Dark blue for time */
+  color: #0056b3;
   margin-right: 15px;
-  min-width: 70px; /* Ensure alignment */
+  min-width: 70px;
 }
 .event-description {
   color: #333;
 }
 .event-stay-description {
-  padding-left: calc(70px + 15px); /* Align with descriptions of timed events */
+  padding-left: calc(70px + 15px);
   font-style: italic;
   color: #555;
 }
 .departure-event .event-description strong,
 .arrival-event .event-description strong {
-  color: #007bff; /* Primary blue for location names */
+  color: #007bff;
 }
-
-/* New styles for city selection */
 .city-selection-section {
   background-color: #fff;
   padding: 20px;
@@ -1299,12 +1065,9 @@ input[type="text"] { /* More general styling for text inputs */
   color: #28a745;
   font-size: 0.9em;
 }
-
-/* New styles for address suggestions */
 .address-input-container, .shop-input-container {
   position: relative;
 }
-
 .address-suggestions, .shop-suggestions {
   position: absolute;
   top: 100%;
@@ -1319,40 +1082,32 @@ input[type="text"] { /* More general styling for text inputs */
   z-index: 1000;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
-
 .suggestion-item {
   padding: 12px;
   cursor: pointer;
   border-bottom: 1px solid #f0f0f0;
   transition: background-color 0.2s;
 }
-
 .suggestion-item:hover {
   background-color: #f8f9fa;
 }
-
 .suggestion-item:last-child {
   border-bottom: none;
 }
-
 .suggestion-name {
   font-weight: bold;
   color: #333;
   margin-bottom: 2px;
 }
-
 .suggestion-address {
   color: #666;
   font-size: 0.9em;
 }
-
 .suggestion-distance {
   font-size: 0.8em;
   color: #888;
   margin-top: 2px;
 }
-
-/* New styles for shop suggestions */
 .shop-suggestions {
   position: absolute;
   background-color: #fff;
@@ -1379,5 +1134,30 @@ input[type="text"] { /* More general styling for text inputs */
   font-size: 0.8em;
   color: #777;
 }
-
+.route-results-container {
+  display: flex;
+  gap: 20px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+.route-option-card {
+  flex: 1;
+  min-width: 300px;
+  padding: 15px;
+  background-color: #e9f5ff;
+  border: 1px solid #b3d7ff;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+}
+.route-option-card h4 {
+  color: #0056b3;
+  margin-top: 0;
+  border-bottom: 2px solid #b3d7ff;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+.route-option-card button {
+  margin-top: 15px;
+  width: 100%;
+}
 </style>
