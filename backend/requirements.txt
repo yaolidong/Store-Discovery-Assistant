@@ -4,3 +4,4 @@ Flask-Login
 Werkzeug
 requests
 gunicorn
+flask_cors

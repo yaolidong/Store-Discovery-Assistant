@@ -5,10 +5,20 @@ from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask_cors import CORS  # 添加CORS支持
 import time
 
 # Initialize Flask app
 app = Flask(__name__)
+CORS(app, supports_credentials=True, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:8080", "http://127.0.0.1:8080"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True
+    }
+})
 app.config['SECRET_KEY'] = os.urandom(24) # Replace with a strong secret key in production
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///travel_planner.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -625,4 +635,7 @@ def init_db():
 init_db()
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0') # In a production environment, use a WSGI server like Gunicorn or uWSGI.
+    with app.app_context():
+        db.create_all()
+    # Note: Binding to '0.0.0.0' is crucial for Docker
+    app.run(host='0.0.0.0', port=5000, debug=True)

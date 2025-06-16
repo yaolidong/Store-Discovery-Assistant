@@ -19,6 +19,14 @@
 const { createApp } = Vue;
 const { createRouter, createWebHashHistory } = VueRouter;
 
+// --- Axios Configuration ---
+// Set the base URL for all API requests.
+// During development, this should point to your local backend server.
+// In production, Nginx will proxy /api requests, so the relative path is correct.
+if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+  axios.defaults.baseURL = 'http://localhost:5001'; 
+}
+
 // Placeholder for components that will be defined in .vue files.
 // In a no-build setup, you might load these as JS objects or use vue3-sfc-loader.
 // For now, we will define them inline and then create the .vue files.
@@ -71,8 +79,17 @@ const Login = {
           }, 100);
         });
       } catch (error) {
-        this.errorMessage = (error.response && error.response.data && error.response.data.message) || 'Login failed. Please try again.';
         console.error('Login error:', error);
+        if (error.response) {
+          // 服务器响应了，但状态码不在2xx范围内
+          this.errorMessage = error.response.data.message || '登录失败，请检查用户名和密码';
+        } else if (error.request) {
+          // 请求已发出，但没有收到响应
+          this.errorMessage = '无法连接到服务器，请检查网络连接或稍后重试';
+        } else {
+          // 请求配置出错
+          this.errorMessage = '登录请求出错，请稍后重试';
+        }
       }
     }
   }
@@ -858,16 +875,25 @@ const Dashboard = {
       <!-- 城市选择部分 -->
       <div class="section city-section">
         <h3><i class="icon">🌍</i> 选择您的城市</h3>
-        <div class="city-grid">
-          <div 
-            v-for="city in cities" 
-            :key="city.name"
-            @click="selectCity(city)"
-            :class="['city-card', { active: selectedCity === city.name }]"
-          >
-            <div class="city-name">{{ city.name }}</div>
-            <div class="city-desc">{{ city.desc }}</div>
-        </div>
+        <div class="city-selection-form">
+          <div class="form-group">
+            <label for="province-select">省份:</label>
+            <select id="province-select" v-model="selectedProvince" @change="onProvinceChange">
+              <option disabled value="">请选择省份</option>
+              <option v-for="province in provinces" :key="province.name" :value="province.name">
+                {{ province.name }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="city-select">城市:</label>
+            <select id="city-select" v-model="selectedCity" @change="onCityChange">
+              <option disabled value="">请选择城市</option>
+              <option v-for="city in availableCities" :key="city.name" :value="city.name">
+                {{ city.name }}
+              </option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -930,14 +956,23 @@ const Dashboard = {
           <div v-if="showShopSuggestions && shopSuggestions.length > 0" class="shop-suggestions">
             <div 
               v-for="suggestion in shopSuggestions" 
-              :key="suggestion.id"
+              :key="suggestion.name"
               @mousedown="selectShopSuggestion(suggestion)"
               class="suggestion-item"
             >
-              <div class="suggestion-name">{{ suggestion.name }}</div>
-              <div class="suggestion-address">{{ suggestion.address }}</div>
-              <div class="suggestion-distance" v-if="suggestion.distance">
-                {{ Math.round(suggestion.distance) }}米
+              <div v-if="suggestion.type === 'chain'" class="suggestion-content">
+                <div class="suggestion-name">
+                  <span class="shop-type-badge chain">🔗 连锁店</span>
+                  {{ suggestion.name }}
+                </div>
+                <div class="suggestion-address">找到 {{ suggestion.count }} 家分店，将在规划时选择最优路线</div>
+              </div>
+              <div v-else class="suggestion-content">
+                <div class="suggestion-name">
+                  <span class="shop-type-badge private">🏪 私人店铺</span>
+                  {{ suggestion.name }}
+                </div>
+                <div class="suggestion-address">{{ suggestion.address }}</div>
               </div>
             </div>
           </div>
@@ -1109,8 +1144,15 @@ const Dashboard = {
       isPickModeActive: false,
       
       // 城市和家庭位置
-      cities: [],
+      provinces: [], // 省份列表
+      selectedProvince: '', // 选中的省份
+      availableCities: [], // 可选的城市列表
+      cities: [], // 保留以备后用，但主要逻辑转到provinces
       selectedCity: '',
+      homeAddress: '',
+      homeLocation: null,
+      addressSuggestions: [],
+      showAddressSuggestions: false,
       currentHomeLocation: null,
       
       // 店铺搜索
@@ -1123,6 +1165,9 @@ const Dashboard = {
       
       // 路线规划
       travelMode: 'DRIVING',
+      departureTime: '',
+      defaultStayDuration: 30,
+      stayDurations: {},
       routeInfo: null,
       showRouteInfo: false,
       routeSummary: null,
@@ -1168,6 +1213,89 @@ const Dashboard = {
       localStorage.removeItem('homeLocation'); // 清除保存的家地址
       this.showNotification('已成功退出登录！', 'success');
       this.$router.push('/login');
+    },
+    
+    // --- 省市选择 ---
+    loadProvinceCityData() {
+        // 在实际应用中，这个数据应该从后端获取或从一个JSON文件加载
+        this.provinces = [
+            { name: '北京', cities: [{ name: '北京', lng: 116.4074, lat: 39.9042 }] },
+            { name: '上海', cities: [{ name: '上海', lng: 121.4737, lat: 31.2304 }] },
+            { name: '天津', cities: [{ name: '天津', lng: 117.2008, lat: 39.0842 }] },
+            { name: '重庆', cities: [{ name: '重庆', lng: 106.5516, lat: 29.5630 }] },
+            { 
+                name: '广东', 
+                cities: [
+                    { name: '广州', lng: 113.2644, lat: 23.1291 },
+                    { name: '深圳', lng: 114.0579, lat: 22.5431 },
+                    { name: '东莞', lng: 113.7518, lat: 23.0205 },
+                    { name: '佛山', lng: 113.1227, lat: 23.0215 }
+                ]
+            },
+            {
+                name: '江苏',
+                cities: [
+                    { name: '南京', lng: 118.7969, lat: 32.0603 },
+                    { name: '苏州', lng: 120.6214, lat: 31.3029 },
+                    { name: '无锡', lng: 120.2958, lat: 31.5698 }
+                ]
+            },
+            {
+                name: '浙江',
+                cities: [
+                    { name: '杭州', lng: 120.1551, lat: 30.2741 },
+                    { name: '宁波', lng: 121.5629, lat: 29.8683 },
+                    { name: '温州', lng: 120.6993, lat: 27.9943 }
+                ]
+            }
+        ];
+        
+        // 尝试从本地存储加载
+        const savedProvince = localStorage.getItem('selectedProvince');
+        const savedCity = localStorage.getItem('selectedCity');
+
+        if (savedProvince && this.provinces.some(p => p.name === savedProvince)) {
+            this.selectedProvince = savedProvince;
+            this.updateAvailableCities();
+            if (savedCity && this.availableCities.some(c => c.name === savedCity)) {
+                this.selectedCity = savedCity;
+                this.onCityChange(); // 确保地图更新
+            }
+        }
+    },
+
+    updateAvailableCities() {
+        const province = this.provinces.find(p => p.name === this.selectedProvince);
+        if (province) {
+            this.availableCities = province.cities;
+        } else {
+            this.availableCities = [];
+        }
+    },
+
+    onProvinceChange() {
+        this.updateAvailableCities();
+        // 默认选择第一个城市（通常是省会）
+        if (this.availableCities.length > 0) {
+            this.selectedCity = this.availableCities[0].name;
+            this.onCityChange();
+        } else {
+            this.selectedCity = '';
+        }
+    },
+
+    onCityChange() {
+        if (!this.selectedCity) return;
+        
+        const city = this.availableCities.find(c => c.name === this.selectedCity);
+        if (city) {
+            localStorage.setItem('selectedProvince', this.selectedProvince);
+            localStorage.setItem('selectedCity', this.selectedCity);
+            const mapDisplay = this.$refs.mapDisplayRef;
+            if (mapDisplay) {
+                mapDisplay.setCenterToCity(city.lng, city.lat, city.name);
+            }
+        }
     },
     
     // 保存家的位置到本地存储
@@ -1981,53 +2109,30 @@ const Dashboard = {
           payload.city = this.selectedCity;
         }
 
-        if (this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude) {
-          payload.latitude = this.currentHomeLocation.latitude;
-          payload.longitude = this.currentHomeLocation.longitude;
-          payload.radius = 20000; // 20公里范围内搜索
-        }
-
-        console.log('搜索店铺参数:', payload);
         const response = await axios.post('/api/shops/find', payload);
         
         if (response.data.shops && response.data.shops.length > 0) {
-          // 计算每个店铺到家的距离
-          const shopsWithDistance = response.data.shops.map(shop => {
-            let distance = 0;
-            if (this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude) {
-              distance = this.calculateDistance(
-                this.currentHomeLocation.longitude,
-                this.currentHomeLocation.latitude,
-                shop.longitude,
-                shop.latitude
-              );
-            }
-            return {
-              ...shop,
-              distance: distance,
-              isChainStore: response.data.shops.length > 1 // 根据搜索结果数量判断是否为连锁店
-            };
-          });
-          
-          // 按距离排序
-          shopsWithDistance.sort((a, b) => a.distance - b.distance);
-
-          // 如果是连锁店（数量大于1），显示所有建议
-          // 如果是私人店铺（数量等于1），直接选中
-          if (shopsWithDistance.length > 1) {
-            this.shopSuggestions = shopsWithDistance.slice(0, 8); // 限制显示8个建议
-            console.log('店铺建议:', this.shopSuggestions);
-          } else if (shopsWithDistance.length === 1) {
-            this.selectShopSuggestion(shopsWithDistance[0]);
+          const foundShops = response.data.shops;
+          if (foundShops.length > 1) {
+            // 连锁店
+            this.shopSuggestions = [{
+              name: this.shopInput.trim(),
+              type: 'chain',
+              count: foundShops.length
+            }];
+          } else {
+            // 私人店铺
+            this.shopSuggestions = [{
+              ...foundShops[0],
+              type: 'private'
+            }];
           }
         } else {
           this.shopSuggestions = [];
-          this.showNotification(`未找到"${this.shopInput}"相关店铺，请尝试其他关键词`, 'warning');
         }
       } catch (error) {
         console.error('Error fetching shop suggestions:', error);
         this.shopSuggestions = [];
-        this.showNotification('搜索失败，请检查网络连接', 'error');
       }
     },
     
@@ -2038,36 +2143,46 @@ const Dashboard = {
     },
     
     selectShopSuggestion(suggestion) {
-      // 直接添加选中的店铺到列表
-      const newShop = {
-        id: Date.now(),
-        name: suggestion.name,
-        address: suggestion.address,
-        latitude: suggestion.latitude,
-        longitude: suggestion.longitude,
-        status: 'confirmed',
-        amap_id: suggestion.id,
-        stayDurationMinutes: 30, // 默认停留30分钟
-        distance: suggestion.distance // 保存距离信息
-      };
-      
-      this.shopsToVisit.push(newShop);
-      this.shopInput = ''; // 清空输入框
-      this.showShopSuggestions = false;
-      this.shopSuggestions = [];
-      
-      // 在地图上添加标记
-      if (this.mapReady) {
-        const mapDisplay = this.$refs.mapDisplayRef;
-        if (mapDisplay && suggestion.latitude && suggestion.longitude) {
-          mapDisplay.addShopMarker(newShop);
-        }
+      let newShop;
+      if (suggestion.type === 'chain') {
+        newShop = {
+          id: Date.now(),
+          name: suggestion.name,
+          type: 'chain',
+          address: `找到 ${suggestion.count} 家分店`,
+          latitude: null,
+          longitude: null
+        };
+      } else { // private
+        newShop = {
+          id: suggestion.id || Date.now(),
+          name: suggestion.name,
+          type: 'private',
+          address: suggestion.address,
+          latitude: suggestion.latitude,
+          longitude: suggestion.longitude
+        };
+      }
+
+      // 检查是否已添加
+      if (this.shopsToVisit.some(s => s.name.toLowerCase() === newShop.name.toLowerCase())) {
+          this.showNotification(`店铺 "${newShop.name}" 已在列表中`, 'warning');
+      } else {
+          this.shopsToVisit.push(newShop);
+          this.showNotification(`"${newShop.name}" 已添加到探店列表`, 'success');
+
+          // 只有私人店铺（有坐标）才能立即在地图上标记
+          if (newShop.type === 'private' && newShop.latitude && newShop.longitude) {
+              const mapDisplay = this.$refs.mapDisplayRef;
+              if (mapDisplay) {
+                  mapDisplay.addShopMarker(newShop);
+              }
+          }
       }
       
-      this.showNotification(
-        `店铺 "${newShop.name}" 已添加到您的探店列表！${newShop.distance ? `（距离约${Math.round(newShop.distance)}米）` : ''}`,
-        'success'
-      );
+      this.shopInput = '';
+      this.showShopSuggestions = false;
+      this.shopSuggestions = [];
     },
     
     removeShop(shopId) {
@@ -2702,20 +2817,11 @@ const Dashboard = {
   },
   
   mounted() {
-    // 加载保存的城市选择
-    const savedCity = localStorage.getItem('selectedCity');
-    if (savedCity) {
-      this.selectedCity = savedCity;
-      const city = this.cities.find(c => c.name === savedCity);
-      if (city) {
-        this.$nextTick(() => {
-          const mapDisplay = this.$refs.mapDisplayRef;
-          if (mapDisplay) {
-            mapDisplay.setCenterToCity(city.lng, city.lat, city.name);
-          }
-        });
-      }
-    }
+    // 设置默认值
+    this.departureTime = this.getCurrentTime();
+
+    // 加载省市数据和用户选择
+    this.loadProvinceCityData();
     
     // 加载保存的家地址
     this.loadHomeLocation();
@@ -4468,6 +4574,41 @@ p { color: #666; }
 .separator {
   margin: 0 8px;
   color: #ccc;
+}
+
+/* 城市选择表单 */
+.city-selection-form {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.form-group {
+  flex: 1;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: #495057;
+}
+
+.form-group select {
+  width: 100%;
+  padding: 12px 15px;
+  border: 2px solid #e9ecef;
+  border-radius: 12px;
+  font-size: 16px;
+  background-color: #fff;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  outline: none;
+}
+
+.form-group select:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 `;
 document.head.appendChild(style);

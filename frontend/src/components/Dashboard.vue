@@ -281,17 +281,47 @@ export default {
   },
   data() {
     return {
+      // 界面状态
+      isLoading: false,
+      notificationMessage: '',
+      notificationType: 'info',
+      notificationDuration: 3000,
+      
+      // 地图相关
+      mapDisplayRef: null,
+      isPickModeActive: false,
+      
+      // 城市和家庭位置
+      cities: [],
+      selectedCity: '',
+      currentHomeLocation: null,
+      homeAddress: '',
       homeAddressInput: '',
       homeLatitudeInput: '',
       homeLongitudeInput: '',
-      currentHomeLocation: {
-        address: null,
-        latitude: null,
-        longitude: null,
-      },
-      storeAddress: '', // Existing property
-      showMap: false,    // Existing property
-      mapPickModeEnabled: false, // For controlling map pick mode
+      showAddressSuggestions: false,
+      addressSuggestions: [],
+      
+      // 店铺搜索
+      shopInput: '',
+      shopSuggestions: [],
+      showShopSuggestions: false,
+      
+      // 探店列表
+      shopsToVisit: [],
+      
+      // 路线规划
+      travelMode: 'DRIVING',
+      routeInfo: null,
+      showRouteInfo: false,
+      routeSummary: null,
+      departureTime: '09:00:00', // 默认出发时间
+      defaultStayDuration: 30, // 默认停留时间（分钟）
+      
+      // 多路线组合
+      routeCombinations: [], // 所有可能的路线组合
+      currentRouteIndex: 0, // 当前显示的路线索引
+      currentRouteShops: [], // 当前路线包含的店铺
 
       // Shops to visit
       shopInput: '',
@@ -332,6 +362,20 @@ export default {
     }
   },
   methods: {
+    // 通知方法
+    showNotification(message, type = 'info', title = '') {
+      if (this.$refs.notification) {
+        if (type === 'success') {
+          this.$refs.notification.success(message, title);
+        } else if (type === 'error') {
+          this.$refs.notification.error(message, title);
+        } else if (type === 'warning') {
+          this.$refs.notification.warning(message, title);
+        } else {
+          this.$refs.notification.info(message, title);
+        }
+      }
+    },
     async fetchHomeLocation() {
       try {
         const response = await axios.get('/api/user/home'); // Assumes cookie-based auth
@@ -764,10 +808,45 @@ export default {
       alert(`店铺 "${newShop.name}" 已添加到您的探店列表！`);
     },
     onCityChange() {
-      if (this.selectedCity && this.selectedTravelMode === 'public_transit') {
-        this.homeCityName = this.selectedCity;
+      if (this.selectedCity) {
+        localStorage.setItem('selectedCity', this.selectedCity);
+        // 如果地图组件已经初始化，更新地图中心
+        if (this.$refs.mapDisplayRef) {
+          const cityCoordinates = this.getCityCoordinates(this.selectedCity);
+          if (cityCoordinates) {
+            this.$refs.mapDisplayRef.setCenterToCity(
+              cityCoordinates.longitude,
+              cityCoordinates.latitude,
+              this.selectedCity
+            );
+          }
+        }
       }
     },
+    getCityCoordinates(cityName) {
+      const cityCoordinates = {
+        '北京': { longitude: 116.4074, latitude: 39.9042 },
+        '上海': { longitude: 121.4737, latitude: 31.2304 },
+        '广州': { longitude: 113.2644, latitude: 23.1291 },
+        '深圳': { longitude: 114.0579, latitude: 22.5431 },
+        '杭州': { longitude: 120.1551, latitude: 30.2741 },
+        '南京': { longitude: 118.7969, latitude: 32.0603 },
+        '成都': { longitude: 104.0668, latitude: 30.5728 },
+        '武汉': { longitude: 114.3055, latitude: 30.5928 },
+        '西安': { longitude: 108.9402, latitude: 34.3416 },
+        '重庆': { longitude: 106.5516, latitude: 29.5630 },
+        '天津': { longitude: 117.2010, latitude: 39.0842 },
+        '苏州': { longitude: 120.5853, latitude: 31.2989 }
+      };
+      return cityCoordinates[cityName];
+    },
+  },
+  created() {
+    // 从本地存储加载保存的城市选择
+    const savedCity = localStorage.getItem('selectedCity');
+    if (savedCity) {
+      this.selectedCity = savedCity;
+    }
   },
   mounted() {
     this.fetchHomeLocation();
@@ -1206,14 +1285,19 @@ input[type="text"] { /* More general styling for text inputs */
   padding: 10px;
   border: 1px solid #ccc;
   border-radius: 4px;
+  font-size: 16px;
+  margin-bottom: 10px;
+  background-color: #fff;
+}
+.city-select:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
 }
 .selected-city-display {
   margin-top: 10px;
-  padding: 10px;
-  background-color: #eef7ff;
-  border: 1px solid #cce0ff;
-  border-radius: 4px;
-  font-style: italic;
+  color: #28a745;
+  font-size: 0.9em;
 }
 
 /* New styles for address suggestions */
