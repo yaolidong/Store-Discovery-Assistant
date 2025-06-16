@@ -150,11 +150,13 @@ def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=N
             else:
                 break
         
-        return all_pois[:max_results]  # 限制最终返回数量
+        # 移除这行错误的return语句
+        # return all_pois[:max_results]  # 限制最终返回数量
 
-        if data.get("status") == "1" and data.get("pois"):
+        # 处理和转换数据格式
+        if all_pois:
             pois_data = []
-            for poi in data["pois"]:
+            for poi in all_pois[:max_results]:  # 限制最终返回数量
                 lon, lat = None, None
                 if poi.get("location"):
                     try:
@@ -175,7 +177,7 @@ def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=N
                 })
             return pois_data
         else:
-            print(f"Amap POI Search Error: {data.get('info')} for keywords: {keywords}")
+            print(f"Amap POI Search Error: No POIs found for keywords: {keywords}")
             return None
     except requests.exceptions.RequestException as e:
         print(f"Amap POI Search request failed: {e}")
