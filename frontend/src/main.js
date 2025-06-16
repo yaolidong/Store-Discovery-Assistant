@@ -23,9 +23,9 @@ const { createRouter, createWebHashHistory } = VueRouter;
 // Set the base URL for all API requests.
 // During development, this should point to your local backend server.
 // In production, Nginx will proxy /api requests, so the relative path is correct.
-if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-  axios.defaults.baseURL = 'http://localhost:5001'; 
-}
+// if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+//   axios.defaults.baseURL = 'http://localhost:5001'; 
+// }
 
 // Placeholder for components that will be defined in .vue files.
 // In a no-build setup, you might load these as JS objects or use vue3-sfc-loader.
@@ -287,7 +287,7 @@ const MapDisplayComp = {
     },
     
     clearAllMarkers() {
-      // Clear all markers
+      // 清除所有标记
       if (this.homeMarker) {
         this.map.remove(this.homeMarker);
         this.homeMarker = null;
@@ -296,7 +296,11 @@ const MapDisplayComp = {
         this.map.remove(marker);
       });
       this.shopMarkers = [];
-      this.markers = [];
+      if (this.markers) {
+        this.markers.forEach(m => this.map.remove(m));
+        this.markers = [];
+      }
+      this.clearRoute && this.clearRoute(); // 清除旧的路线图层
     },
     
     clearRoute() {
@@ -843,6 +847,57 @@ const MapDisplayComp = {
       const newCenter = new AMap.LngLat(longitude, latitude);
       this.map.setCenter(newCenter);
       this.map.setZoom(11);
+    },
+
+    // 新增：绘制后端优化后的路线
+    drawOptimizedRoute(routeData) {
+      if (!this.map || !routeData) {
+        console.error('地图未初始化或没有路线数据');
+        return;
+      }
+      this.clearAllMarkers(); // 清除地图上所有旧元素
+      const allMapElements = [];
+      // 绘制路线的每一段
+      routeData.route_segments.forEach(segment => {
+        if (segment.polyline) {
+          const path = segment.polyline.split(';').map(coordStr => {
+            const parts = coordStr.split(',');
+            return new AMap.LngLat(parseFloat(parts[0]), parseFloat(parts[1]));
+          });
+          if (path.length > 0) {
+            const polyline = new AMap.Polyline({
+              path: path,
+              strokeColor: '#3366FF',
+              strokeOpacity: 0.8,
+              strokeWeight: 6,
+            });
+            this.map.add(polyline);
+            allMapElements.push(polyline);
+          }
+        }
+      });
+      // 在地图上标记每一个点（家和店铺）
+      routeData.optimized_order.forEach((point, index) => {
+        const isHome = point.id === 'home';
+        const marker = new AMap.Marker({
+          position: new AMap.LngLat(point.longitude, point.latitude),
+          title: point.name,
+          label: {
+            content: (index + 1).toString(),
+            direction: 'center'
+          },
+          icon: new AMap.Icon({
+            size: new AMap.Size(25, 34),
+            image: isHome ? 'https://webapi.amap.com/theme/v1.3/markers/n/mark_r.png' : 'https://webapi.amap.com/theme/v1.3/markers/n/mark_b.png'
+          })
+        });
+        this.map.add(marker);
+        allMapElements.push(marker);
+      });
+      // 让地图自动缩放到合适的视野
+      if (allMapElements.length > 0) {
+        this.map.setFitView(allMapElements, false, [60, 60, 60, 60], 18);
+      }
     }
   },
   beforeUnmount() {
@@ -2436,109 +2491,145 @@ const Dashboard = {
 
     // 修改路线规划方法
     async getDirections() {
-      if (!this.currentHomeLocation || !this.currentHomeLocation.latitude || !this.currentHomeLocation.longitude) {
-        this.showNotification('请先设置家庭位置', 'warning');
-        return;
-      }
-
-      if (this.shopsToVisit.length === 0) {
-        this.showNotification('请先添加要探访的店铺', 'warning');
-        return;
-      }
-
-      try {
         this.isLoading = true;
-        this.showNotification('正在计算最优路线...', 'info');
-        
-        // 先查询所有店铺的详细信息
-        await this.queryAllShopsDetails();
-        
-        // 生成所有可能的路线组合
-        const routeCombinations = this.generateRouteCombinations();
-        
-        if (routeCombinations.length === 0) {
-          this.showNotification('无法生成有效的路线', 'error');
-          this.isLoading = false;
-          return;
-        }
-        
-        const mapDisplay = this.$refs.mapDisplayRef;
-        if (!mapDisplay) {
-          console.error('地图组件未初始化');
-          this.isLoading = false;
-          return;
-        }
-        
-        // 计算每种组合的路线
-        const routeResults = [];
-        
-        for (let i = 0; i < Math.min(routeCombinations.length, 10); i++) { // 限制最多计算10种组合
-          const shops = routeCombinations[i];
-          
-          // 准备路线规划参数
-          const waypoints = [
-            { // 起点为家
-              location: [this.currentHomeLocation.longitude, this.currentHomeLocation.latitude],
-              name: '家'
-            },
-            ...shops.map(shop => ({
-              location: [shop.longitude, shop.latitude],
-              name: shop.name
-            })),
-            { // 终点回家
-              location: [this.currentHomeLocation.longitude, this.currentHomeLocation.latitude],
-              name: '家'
+        this.showNotification('正在解析店铺位置...', 'info');
+
+        // 1. 分离普通店铺和连锁店
+        const privateStores = this.shopsToVisit.filter(s => s.type !== 'chain' && s.latitude && s.longitude);
+        const chainStores = this.shopsToVisit.filter(s => s.type === 'chain');
+
+        let finalShops = [...privateStores]; // 最终参与路线规划的店铺列表
+
+        // 2. 处理连锁店
+        if (chainStores.length > 0) {
+            if (!this.homeLocation) {
+                this.showNotification('请先设置家的位置才能解析连锁店', 'error');
+                this.isLoading = false;
+                return;
             }
-          ];
-          
-          console.log('计算路线', i+1, '/', Math.min(routeCombinations.length, 10), ':', {
-            mode: this.travelMode,
-            shops: shops.map(s => s.name)
-          });
-          
-          // 计算路线
-          let routeResult = null;
-          if (this.travelMode === 'TRANSIT') {
-            routeResult = await mapDisplay.planTransitRoute(waypoints);
-          } else if (this.travelMode === 'DRIVING') {
-            routeResult = await mapDisplay.planDrivingRoute(waypoints);
-          } else if (this.travelMode === 'WALKING') {
-            routeResult = await mapDisplay.planWalkingRoute(waypoints);
-          }
-          
-          if (routeResult) {
-            routeResults.push({
-              shops: shops,
-              route: routeResult,
-              totalTime: routeResult.totalTime || 0,
-              totalDistance: routeResult.totalDistance || 0
-            });
-          }
+
+            try {
+                for (const chain of chainStores) {
+                    this.showNotification(`正在寻找 ${chain.name} 的最优分店...`, 'info');
+
+                    // 2.1 调用API查找所有分店
+                    const findPayload = {
+                        keywords: chain.name,
+                        city: this.selectedCity,
+                        latitude: this.homeLocation.latitude,
+                        longitude: this.homeLocation.longitude,
+                        radius: 20000 // 搜索半径扩大到20公里
+                    };
+                    const branchesResponse = await axios.post('/api/shops/find', findPayload);
+                    const branches = branchesResponse.data.shops;
+
+                    if (!branches || branches.length === 0) {
+                        this.showNotification(`未找到 ${chain.name} 的任何分店`, 'warning');
+                        continue; // 继续处理下一个连锁店
+                    }
+
+                    // 2.2 为每个分店计算包含它在内的总行程，找出最优的那个
+                    let bestBranch = null;
+                    let minTotalDuration = Infinity;
+
+                    // 遍历每一个分店，把它当作一个普通店铺，和其他店铺一起计算一次总行程
+                    for (const branch of branches) {
+                        if (!branch.latitude || !branch.longitude) continue;
+
+                        // 创建一个临时的店铺列表用于测试
+                        const tempShopList = [...privateStores, branch];
+                        
+                        const optimizePayload = {
+                            home_location: this.homeLocation,
+                            shops: tempShopList.map(s => ({
+                                id: s.id, name: s.name, latitude: s.latitude, longitude: s.longitude
+                            })),
+                            mode: this.travelMode.toLowerCase()
+                        };
+                        if (this.travelMode === 'TRANSIT') {
+                            optimizePayload.city = this.selectedCity;
+                        }
+
+                        // 调用优化API来评估这个分店
+                        const tempRouteResponse = await axios.post('/api/route/optimize', optimizePayload);
+                        const tempRoute = tempRouteResponse.data.routes.fastest_travel_time || tempRouteResponse.data.routes.shortest_distance;
+
+                        if (tempRoute && tempRoute.total_overall_duration < minTotalDuration) {
+                            minTotalDuration = tempRoute.total_overall_duration;
+                            bestBranch = branch;
+                        }
+                    }
+
+                    if (bestBranch) {
+                        this.showNotification(`${chain.name} 的最优分店已确定为: ${bestBranch.name}`, 'success');
+                        // 将选出的最优分店添加到最终列表
+                        finalShops.push({
+                            ...bestBranch,
+                            id: chain.id, // 保留原列表中的ID
+                            stay_duration: (this.getStayDuration(chain.id) || 0) * 60
+                        });
+                    } else {
+                        this.showNotification(`无法为 ${chain.name} 确定最优分店`, 'warning');
+                    }
+                }
+            } catch(error) {
+                console.error('解析连锁店时出错:', error);
+                this.showNotification('解析连锁店位置失败', 'error');
+                this.isLoading = false;
+                return;
+            }
         }
-        
-        // 按时间排序
-        routeResults.sort((a, b) => a.totalTime - b.totalTime);
-        
-        // 保存计算结果
-        this.routeCombinations = routeResults;
-        
-        // 显示最短时间的路线
-        if (routeResults.length > 0) {
-          const bestRoute = routeResults[0];
-          
-          // 显示最佳路线
-          this.displayRoute(bestRoute);
-          
-          this.showNotification(`已计算出${routeResults.length}种可能的路线，显示最短时间路线`, 'success');
-        } else {
-          this.showNotification('无法计算有效的路线，请重试', 'error');
+
+        // 3. 检查最终是否有可规划的店铺
+        if (finalShops.length === 0) {
+            this.showNotification('没有可规划的店铺', 'error');
+            this.isLoading = false;
+            return;
         }
-      } catch (error) {
-        console.error('路线规划失败:', error);
-        this.showNotification('路线规划失败，请重试', 'error');
-      } finally {
-        this.isLoading = false;
-      }
+
+        // 4. 使用最终的、包含具体分店的列表，进行最终的路线规划
+        this.showNotification('所有店铺位置已确定，正在计算最终路线...', 'info');
+
+        const finalPayload = {
+            home_location: this.homeLocation,
+            shops: finalShops.map(shop => ({
+                id: shop.id,
+                name: shop.name,
+                latitude: shop.latitude,
+                longitude: shop.longitude,
+                stay_duration: (this.getStayDuration(shop.id) || 0) * 60 // 分钟转秒
+            })),
+            mode: this.travelMode.toLowerCase(),
+            city: this.selectedCity
+        };
+        
+        try {
+            const response = await axios.post('/api/route/optimize', finalPayload);
+            const { routes, message } = response.data;
+            const routeDataToShow = routes.fastest_travel_time || routes.shortest_distance;
+
+            if (routeDataToShow) {
+                this.showNotification('最优路线计算成功！', 'success');
+                const mapDisplay = this.$refs.mapDisplayRef;
+                if (mapDisplay) {
+                    mapDisplay.drawOptimizedRoute(routeDataToShow);
+                }
+                this.routeInfo = routeDataToShow;
+                this.showRouteInfo = true;
+                this.routeSummary = {
+                    totalTime: this.formatTime(routeDataToShow.total_overall_duration),
+                    totalDistance: this.formatDistance(routeDataToShow.total_distance),
+                };
+            } else {
+                this.showNotification(message || '未能计算出有效路线', 'error');
+            }
+
+        } catch (error) {
+            console.error('最终路线规划失败:', error);
+            this.showNotification('最终路线规划失败', 'error');
+        } finally {
+            this.isLoading = false;
+        }
     },
 
     // 添加格式化方法
