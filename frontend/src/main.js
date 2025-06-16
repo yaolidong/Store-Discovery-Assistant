@@ -2155,11 +2155,11 @@ const Dashboard = {
           longitude: null
         };
       } else { 
-        // 当建议是私人店铺时
+        // 当建议是私人店铺时或具体分店时，动态判断类型
         newShop = {
           id: suggestion.id || Date.now(),
           name: suggestion.name,
-          type: 'private', // 正确设置类型
+          type: this.isChainStore(suggestion.name) ? 'chain' : 'private',
           address: suggestion.address,
           latitude: suggestion.latitude,
           longitude: suggestion.longitude
@@ -2573,7 +2573,8 @@ const Dashboard = {
           address: '待查询',
           latitude: null,
           longitude: null,
-          isChainStore: null, // 暂不确定是否为连锁店
+          type: this.isChainStore(shopName) ? 'chain' : 'private',
+          status: 'pending',
           actualShops: [] // 用于存储该名称对应的所有实际店铺
         });
 
