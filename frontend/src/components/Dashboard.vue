@@ -204,38 +204,91 @@
         Please set your home location, confirm at least one shop, and specify city if using transit, to enable route calculation.
       </p>
 
-      <!-- Results Display: Two Columns for Time vs Distance -->
-      <div v-if="routeByTime || routeByDistance" class="route-results-container">
-        <!-- Time Optimized Route -->
-        <div v-if="routeByTime" class="route-option-card">
-          <h4>🏆 时间最短路线</h4>
-          <p>
-            <strong>总时长:</strong> {{ Math.round(routeByTime.total_overall_duration / 60) }} 分钟<br>
-            <strong>总距离:</strong> {{ (routeByTime.total_distance / 1000).toFixed(2) }} 公里
-          </p>
-          <h5>路线顺序:</h5>
-          <ul class="route-steps-list">
-            <li v-for="(point, index) in routeByTime.optimized_order" :key="point.id + '-' + index" class="route-step">
-              <strong>{{ index === 0 ? '出发' : index }}. {{ point.name }}</strong>
-            </li>
-          </ul>
-          <button @click="displayRouteOnMap(routeByTime)" class="btn-secondary">在地图上显示此路线</button>
-        </div>
+      <!-- NEW DUAL COLUMN DISPLAY -->
+      <div v-if="routesByTime.length > 0 || routesByDistance.length > 0" class="dual-routes-container">
+        <h3>
+          可选路线对比
+          <span class="route-summary-badge">
+            找到 {{ routesByTime.length }} (时间) + {{ routesByDistance.length }} (距离) 方案
+          </span>
+        </h3>
+        
+        <div class="routes-columns">
+          <!-- Time Optimized Column -->
+          <div class="route-column time-column">
+            <div class="column-header">
+              <h4>⏱️ 时间最短 <span class="column-count">{{ routesByTime.length }}</span></h4>
+              <p class="column-description">优先考虑总耗时最短的方案</p>
+            </div>
+            <div class="route-candidates" v-if="routesByTime.length > 0">
+              <div 
+                v-for="(route, index) in routesByTime" 
+                :key="route.id" 
+                class="route-candidate"
+                :class="{ selected: selectedRouteId === route.id }"
+                @click="selectRoute(route)"
+              >
+                <div class="candidate-header">
+                  <span class="candidate-rank">方案 #{{ index + 1 }}</span>
+                </div>
+                <div class="candidate-stats">
+                  <div class="stat-primary">
+                    <span class="stat-value">{{ Math.round(route.total_overall_duration / 60) }}</span> 分钟
+                  </div>
+                  <div class="stat-secondary">
+                    <span class="stat-value">{{ (route.total_distance / 1000).toFixed(2) }}</span> 公里
+                  </div>
+                </div>
+                <div class="candidate-route">
+                  <p class="route-path">
+                    {{ route.optimized_order.map(p => p.name).join(' → ') }}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div v-else class="no-routes">
+              <span class="icon">☹️</span>
+              <p>未找到时间最优路线</p>
+            </div>
+          </div>
 
-        <!-- Distance Optimized Route -->
-        <div v-if="routeByDistance" class="route-option-card">
-          <h4>📏 距离最短路线</h4>
-          <p>
-            <strong>总距离:</strong> {{ (routeByDistance.total_distance / 1000).toFixed(2) }} 公里<br>
-            <strong>总时长:</strong> {{ Math.round(routeByDistance.total_overall_duration / 60) }} 分钟
-          </p>
-          <h5>路线顺序:</h5>
-          <ul class="route-steps-list">
-            <li v-for="(point, index) in routeByDistance.optimized_order" :key="point.id + '-' + index" class="route-step">
-              <strong>{{ index === 0 ? '出发' : index }}. {{ point.name }}</strong>
-            </li>
-          </ul>
-          <button @click="displayRouteOnMap(routeByDistance)" class="btn-secondary">在地图上显示此路线</button>
+          <!-- Distance Optimized Column -->
+          <div class="route-column distance-column">
+            <div class="column-header">
+              <h4>📏 距离最短 <span class="column-count">{{ routesByDistance.length }}</span></h4>
+              <p class="column-description">优先考虑总里程最短的方案</p>
+            </div>
+            <div class="route-candidates" v-if="routesByDistance.length > 0">
+              <div 
+                v-for="(route, index) in routesByDistance" 
+                :key="route.id" 
+                class="route-candidate"
+                :class="{ selected: selectedRouteId === route.id }"
+                @click="selectRoute(route)"
+              >
+                <div class="candidate-header">
+                  <span class="candidate-rank">方案 #{{ index + 1 }}</span>
+                </div>
+                <div class="candidate-stats">
+                  <div class="stat-primary">
+                    <span class="stat-value">{{ (route.total_distance / 1000).toFixed(2) }}</span> 公里
+                  </div>
+                  <div class="stat-secondary">
+                    <span class="stat-value">{{ Math.round(route.total_overall_duration / 60) }}</span> 分钟
+                  </div>
+                </div>
+                <div class="candidate-route">
+                  <p class="route-path">
+                    {{ route.optimized_order.map(p => p.name).join(' → ') }}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div v-else class="no-routes">
+              <span class="icon">☹️</span>
+              <p>未找到距离最优路线</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -319,15 +372,21 @@ export default {
       // Shops to Visit List
       shopsToVisit: [],
       
-      // Route Planning
-      selectedTravelMode: 'driving',
-      homeCityName: '', 
+      // --- UNIFIED ROUTE PLANNING STATE ---
+      selectedTravelMode: 'driving', // Unified travel mode
+      homeCityName: '', // For public transit
+      departureTime: '09:00:00', // Replaces defaultStartTime
+      defaultStayDuration: 30,
       
-      // Optimized Route Data & Schedule
-      routeByTime: null,
-      routeByDistance: null,
-      displayableSchedule: null,
-      defaultStartTime: '09:00:00',
+      // Route results for the new dual-column UI
+      routesByDistance: [], // Array for distance-optimized candidates
+      routesByTime: [],     // Array for time-optimized candidates
+      
+      // UI state for selected route
+      selectedRouteId: null,      // The ID of the currently selected route candidate
+      currentSelectedRoute: null, // The full object of the selected route
+      displayableSchedule: null,  // The schedule for the selected route
+      
       showMap: false,
     };
   },
@@ -477,15 +536,16 @@ export default {
     },
     getDirections() {
       if (this.isCalculatingRoute || !this.canCalculateRoute) return;
-
       this.isCalculatingRoute = true;
-      this.routeByTime = null;
-      this.routeByDistance = null;
+      // Reset state for new results
+      this.routesByTime = [];
+      this.routesByDistance = [];
+      this.selectedRouteId = null;
+      this.currentSelectedRoute = null;
       this.displayableSchedule = null;
       if (this.$refs.mapDisplay) {
          this.$refs.mapDisplay.clearMapElements();
       }
-
       const confirmedShops = this.shopsToVisit
         .filter(shop => shop.status === 'confirmed')
         .map(shop => ({
@@ -496,7 +556,6 @@ export default {
             amap_id: shop.amap_id,
             stay_duration: (shop.stayDurationMinutes || 0) * 60
         }));
-
       const payload = {
         home_location: {
           latitude: this.currentHomeLocation.latitude,
@@ -509,10 +568,30 @@ export default {
       
       axios.post('/api/route/optimize', payload)
         .then(response => {
-          this.routeByTime = response.data.routes?.fastest_travel_time || null;
-          this.routeByDistance = response.data.routes?.shortest_distance || null;
-          if (this.routeByTime || this.routeByDistance) {
-            this.displayRouteOnMap(this.routeByTime || this.routeByDistance);
+          console.log("API Response received:", response.data);
+
+          const timeRoutes = (response.data.routes?.fastest_travel_time_routes || []).map((route, index) => ({ ...route, id: `time-${index}` }));
+          const distanceRoutes = (response.data.routes?.shortest_distance_routes || []).map((route, index) => ({ ...route, id: `distance-${index}` }));
+
+          // Use this.$set to ensure reactivity
+          this.$set(this, 'routesByTime', timeRoutes);
+          this.$set(this, 'routesByDistance', distanceRoutes);
+          
+          console.log("Data assigned to component state. Forcing UI update...", {
+            routesByTime: this.routesByTime,
+            routesByDistance: this.routesByDistance
+          });
+
+          // Force Vue to re-render the component.
+          this.$forceUpdate();
+
+          // Set a default selection if routes are found
+          if (this.routesByTime.length > 0) {
+            console.log("Defaulting to first TIME-optimized route.");
+            this.selectRoute(this.routesByTime[0]);
+          } else if (this.routesByDistance.length > 0) {
+            console.log("Defaulting to first DISTANCE-optimized route.");
+            this.selectRoute(this.routesByDistance[0]);
           } else {
             alert("No valid routes found.");
           }
@@ -525,14 +604,25 @@ export default {
           this.isCalculatingRoute = false;
         });
     },
+    selectRoute(route) {
+      console.log("Attempting to select route:", route);
+      if (!route || !route.id) {
+        console.error("Invalid route object passed to selectRoute.", route);
+        return;
+      }
+      this.selectedRouteId = route.id;
+      this.currentSelectedRoute = route;
+      console.log("State after selecting route:", {
+        selectedRouteId: this.selectedRouteId,
+      });
+      this.displayRouteOnMap(route);
+    },
     generateDisplaySchedule(routeData) {
       if (!routeData || !routeData.optimized_order || !routeData.route_segments) return [];
-
       const displayScheduleItems = [];
       let scheduleTime = new Date();
-      const [hours, minutes, seconds] = this.defaultStartTime.split(':').map(Number);
+      const [hours, minutes, seconds] = this.departureTime.split(':').map(Number);
       scheduleTime.setHours(hours, minutes, seconds, 0);
-
       if (routeData.optimized_order.length > 0 && routeData.optimized_order[0].name === "Home") {
         displayScheduleItems.push({
           type: 'departure',
@@ -1159,5 +1249,320 @@ input[type="text"] {
 .route-option-card button {
   margin-top: 15px;
   width: 100%;
+}
+/* 双列路线展示样式 - 添加到现有CSS中 */
+
+.dual-routes-container {
+  background: #fff;
+  border-radius: 16px;
+  padding: 25px;
+  margin-top: 20px;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+  border: 1px solid rgba(0,0,0,0.05);
+}
+
+.dual-routes-container h3 {
+  margin: 0 0 25px 0;
+  color: #2c3e50;
+  font-size: 1.4rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.route-summary-badge {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+/* 双列布局 */
+.routes-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+  margin-bottom: 25px;
+}
+
+.route-column {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 20px;
+  min-height: 400px;
+}
+
+.distance-column {
+  border-left: 4px solid #28a745;
+}
+
+.time-column {
+  border-left: 4px solid #667eea;
+}
+
+/* 列标题 */
+.column-header {
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 2px solid #e9ecef;
+}
+
+.column-header h4 {
+  margin: 0 0 8px 0;
+  color: #2c3e50;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.column-count {
+  background: rgba(0,0,0,0.1);
+  color: #6c757d;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.column-description {
+  color: #6c757d;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+/* 路线候选项容器 */
+.route-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 单个路线候选项 */
+.route-candidate {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: 2px solid transparent;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.route-candidate:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+  border-color: #e9ecef;
+}
+
+.route-candidate.selected {
+  border-color: #667eea;
+  background: linear-gradient(135deg, #f8f9ff 0%, #f0f4ff 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.2);
+}
+
+.distance-column .route-candidate.selected {
+  border-color: #28a745;
+  background: linear-gradient(135deg, #f8fff8 0%, #f0fff0 100%);
+  box-shadow: 0 8px 25px rgba(40, 167, 69, 0.2);
+}
+
+/* 候选项头部 */
+.candidate-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.candidate-rank {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.distance-column .candidate-rank {
+  background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+}
+
+.candidate-type {
+  color: #6c757d;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+/* 统计数据 */
+.candidate-stats {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.stat-primary, .stat-secondary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stat-primary .stat-value {
+  font-weight: 700;
+  color: #2c3e50;
+  font-size: 1.1rem;
+}
+
+.stat-secondary .stat-value {
+  color: #6c757d;
+  font-size: 0.9rem;
+}
+
+.stat-icon {
+  font-size: 1rem;
+}
+
+/* 路线路径 */
+.candidate-route {
+  margin-bottom: 12px;
+}
+
+.route-path {
+  color: #495057;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 店铺标签 */
+.candidate-shops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.shop-badge {
+  background: #e9ecef;
+  color: #495057;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.route-candidate.selected .shop-badge {
+  background: rgba(102, 126, 234, 0.1);
+  color: #667eea;
+}
+
+.distance-column .route-candidate.selected .shop-badge {
+  background: rgba(40, 167, 69, 0.1);
+  color: #28a745;
+}
+
+/* 无路线状态 */
+.no-routes {
+  text-align: center;
+  padding: 40px 20px;
+  color: #6c757d;
+}
+
+.no-routes .icon {
+  font-size: 2.5rem;
+  margin-bottom: 10px;
+  display: block;
+  opacity: 0.5;
+}
+
+.no-routes p {
+  margin: 0;
+  font-style: italic;
+}
+
+/* 路线对比统计 */
+.routes-comparison {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 20px;
+}
+
+.routes-comparison h4 {
+  margin: 0 0 15px 0;
+  color: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.1rem;
+}
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 15px;
+}
+
+.comparison-item {
+  background: #fff;
+  padding: 15px;
+  border-radius: 10px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.comparison-label {
+  display: block;
+  font-size: 0.85rem;
+  color: #6c757d;
+  margin-bottom: 5px;
+  font-weight: 500;
+}
+
+.comparison-value {
+  display: block;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #2c3e50;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .routes-columns {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  
+  .candidate-stats {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .candidate-shops {
+    justify-content: center;
+  }
+  
+  .comparison-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .dual-routes-container {
+    padding: 15px;
+  }
+  
+  .route-column {
+    padding: 15px;
+  }
+  
+  .comparison-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

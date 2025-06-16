@@ -603,8 +603,8 @@ def find_shops():
 # --- Route Optimization Endpoint ---
 MAX_SHOPS_FOR_PERMUTATIONS = 6 # Max shops (N) for permutation-based TSP
 
+# 修改 app.py 中的 /api/route/optimize 接口
 @app.route('/api/route/optimize', methods=['POST'])
-# @login_required  # 移除这行
 def optimize_route():
     data = request.get_json()
     if not data:
@@ -613,8 +613,10 @@ def optimize_route():
     home_location_data = data.get('home_location')
     shops_data = data.get('shops')
     mode = data.get('mode', 'driving')
-    city_param = data.get('city') # City name or adcode, used for public transit
-    preferred_shop_ids = data.get('preferred_shop_ids', []) # Added
+    city_param = data.get('city')
+    
+    # 新增：获取每种类型需要返回的候选路线数量，默认5个
+    top_n = data.get('top_n', 5)
 
     if not home_location_data or 'latitude' not in home_location_data or 'longitude' not in home_location_data:
         return jsonify({'message': 'Missing or invalid "home_location". It must be an object with "latitude" and "longitude".'}), 400
@@ -626,78 +628,32 @@ def optimize_route():
     if not api_key:
         return jsonify({'message': 'Amap API key not configured on server.'}), 500
 
-    # 处理连锁店汇总信息，展开为具体分店
-    expanded_shops = []
-    for shop in shops_data:
-        # 检查是否为连锁店汇总信息
-        if shop.get('type') == 'chain' and shop.get('id', '').startswith('chain_'):
-            # 提取连锁店名称
-            chain_name = shop.get('name')
-            if not chain_name:
-                continue
-                
-            # 重新搜索该连锁店的具体分店
-            location_str = None
-            if home_location_data.get('latitude') and home_location_data.get('longitude'):
-                location_str = f"{home_location_data['longitude']},{home_location_data['latitude']}"
-            
-            chain_shops = search_poi(
-                api_key=api_key,
-                keywords=chain_name,
-                city=city_param,
-                location=location_str,
-                radius=20000,  # 20km搜索半径
-                max_results=20  # 限制分店数量
-            )
-            
-            if chain_shops:
-                # 为每个分店添加连锁店标识和默认停留时间
-                for chain_shop in chain_shops:
-                    chain_shop['type'] = 'chain'
-                    chain_shop['brand'] = chain_name
-                    chain_shop['stay_duration'] = shop.get('stay_duration', 30)  # 默认30分钟
-                expanded_shops.extend(chain_shops)
-            else:
-                # 如果搜索失败，返回错误
-                return jsonify({'message': f'无法找到 {chain_name} 的具体分店信息'}), 400
-        else:
-            # 普通店铺直接添加
-            expanded_shops.append(shop)
-    
-    # 更新shops_data为展开后的店铺列表
-    shops_data = expanded_shops
-
-    # 验证展开后的店铺数据
+    # 验证店铺数据
     for shop in shops_data:
         if 'latitude' not in shop or 'longitude' not in shop or 'id' not in shop or 'name' not in shop:
             return jsonify({'message': 'Each shop in "shops" must have "id", "name", "latitude", and "longitude".'}), 400
-        # Validate stay_duration if provided
         if 'stay_duration' in shop:
             if not isinstance(shop['stay_duration'], (int, float)) or shop['stay_duration'] < 0:
                 return jsonify({'message': f'Optional "stay_duration" for shop {shop.get("id", "")} must be a non-negative number.'}), 400
         else:
-            shop['stay_duration'] = 0 # Default to 0 if not provided
+            shop['stay_duration'] = 0
 
     if len(shops_data) > MAX_SHOPS_FOR_PERMUTATIONS:
         return jsonify({'message': f'Too many shops for optimization. Please select {MAX_SHOPS_FOR_PERMUTATIONS} or fewer shops.'}), 400
 
-    # Prepare points: Home is point 0, shops are 1 to N
-    # Keep original shop data to return in optimized_order
+    # 准备点数据
     home_point = {
         "id": "home",
         "name": "Home",
         "latitude": home_location_data['latitude'],
         "longitude": home_location_data['longitude'],
-        "stay_duration": 0 # Home has no stay duration in this context
+        "stay_duration": 0
     }
-    # Ensure shops_data now contains validated/defaulted stay_duration
-    all_points_objects = [home_point] + shops_data # Store full objects for reference
-
-    # Create a list of (lat, lon) for distance matrix calculation
+    all_points_objects = [home_point] + shops_data
     all_coords = [(p['latitude'], p['longitude']) for p in all_points_objects]
     num_points = len(all_coords)
 
-    # Build distance matrix: cost_matrix[i][j] stores {'distance': d, 'duration': t, 'polyline': pl}
+    # 构建距离矩阵
     cost_matrix = [[None for _ in range(num_points)] for _ in range(num_points)]
 
     for i in range(num_points):
@@ -707,33 +663,22 @@ def optimize_route():
 
             segment_details = None
             if mode == "public_transit":
-                if not city_param: # City is crucial for public transit
+                if not city_param:
                     return jsonify({'message': 'Missing "city" parameter in request body, required for public transit mode.'}), 400
                 segment_details = get_public_transit_segment_details(api_key, p1_lat, p1_lon, p2_lat, p2_lon, city_param)
-            else: # Default to driving
+            else:
                 segment_details = get_driving_route_segment_details(api_key, p1_lat, p1_lon, p2_lat, p2_lon)
 
             if segment_details is None:
                 return jsonify({'message': f'Failed to get {mode} route details between {all_points_objects[i]["name"]} and {all_points_objects[j]["name"]}. Cannot optimize.'}), 500
 
             cost_matrix[i][j] = segment_details
-            # For public transit, cost might not be symmetric, but for permutation TSP, we often assume it or build full matrix.
-            # For simplicity here, if we need symmetric for TSP algo, we might need to call API twice or use this value.
-            # However, Amap's transit duration can vary significantly based on direction due to one-way lines etc.
-            # For a more accurate TSP with public transit, matrix might need cost_matrix[j][i] fetched separately.
-            # For now, assume symmetry for simplicity of TSP distance calc, but this is a known limitation.
             cost_matrix[j][i] = segment_details
 
-    # TSP using permutations for shops (points 1 to num_points-1)
-    shop_indices = list(range(1, num_points)) # Indices of shops in all_coords/all_points_objects
+    # TSP计算
+    shop_indices = list(range(1, num_points))
+    total_stay_duration_val = sum(all_points_objects[shop_idx].get('stay_duration', 0) for shop_idx in shop_indices)
 
-    # Calculate total stay duration once - it's independent of path order
-    total_stay_duration_val = 0
-    if shop_indices: # Only calculate if there are shops
-        for shop_idx_in_all_points in shop_indices: # Iterate through original shop indices
-             total_stay_duration_val += all_points_objects[shop_idx_in_all_points].get('stay_duration', 0)
-
-    # Handle case with no shops
     if not shop_indices:
         home_route_segment = {
             "from_name": home_point["name"], "to_name": home_point["name"],
@@ -746,143 +691,87 @@ def optimize_route():
             'total_travel_time': 0,
             'total_stay_time': 0,
             'total_overall_duration': 0,
-            'route_segments': [] # No travel segments if only one point
+            'route_segments': []
         }
         return jsonify({
             "routes": {
-                "shortest_distance": single_point_route_data,
-                "fastest_travel_time": single_point_route_data
+                "shortest_distance_routes": [single_point_route_data],
+                "fastest_travel_time_routes": [single_point_route_data]
             },
             "message": "No shops to visit. Only home location provided."
         }), 200
 
-    # --- Optimization Pass 1: Shortest Distance ---
-    min_total_distance_val = float('inf')
-    best_path_indices_distance = []
-
+    # 计算所有排列的距离和时间
+    all_route_results = []
+    
     for p in itertools.permutations(shop_indices):
-        current_distance_for_perm = 0
-        current_path_indices = [0] + list(p) + [0] # Home -> Shops -> Home
-        valid_permutation = True
+        current_path_indices = [0] + list(p) + [0]
+        
+        # 计算总距离和总时间
+        total_distance = 0
+        total_time = 0
+        valid_route = True
+        route_segments = []
+        
         for i in range(len(current_path_indices) - 1):
             u, v = current_path_indices[i], current_path_indices[i+1]
             if cost_matrix[u][v] is None:
-                valid_permutation = False
+                valid_route = False
                 break
-            current_distance_for_perm += cost_matrix[u][v]['distance']
-
-        if valid_permutation and current_distance_for_perm < min_total_distance_val:
-            min_total_distance_val = current_distance_for_perm
-            best_path_indices_distance = current_path_indices
-
-    if not best_path_indices_distance:
-        return jsonify({'message': 'Could not find an optimal route (distance-based). Check segment routing.'}), 500
-
-    # Construct details for the shortest distance route
-    optimized_order_objects_distance = [all_points_objects[i] for i in best_path_indices_distance]
-    route_segments_details_distance = []
-    total_travel_duration_for_distance_route = 0
-    for i in range(len(best_path_indices_distance) - 1):
-        u, v = best_path_indices_distance[i], best_path_indices_distance[i+1]
-        segment_info = cost_matrix[u][v]
-        route_segments_details_distance.append({
-            "from_name": all_points_objects[u]["name"], "to_name": all_points_objects[v]["name"],
-            "from_id": all_points_objects[u]["id"], "to_id": all_points_objects[v]["id"],
-            "distance": segment_info['distance'], "duration": segment_info['duration'],
-            "polyline": segment_info['polyline'], "steps": segment_info.get('steps', [])
-        })
-        total_travel_duration_for_distance_route += segment_info['duration']
-
-    overall_total_duration_distance = total_travel_duration_for_distance_route + total_stay_duration_val
-
-    shortest_distance_route_data = {
-        'optimized_order': optimized_order_objects_distance,
-        'total_distance': min_total_distance_val,
-        'total_travel_time': total_travel_duration_for_distance_route,
-        'total_stay_time': total_stay_duration_val,
-        'total_overall_duration': overall_total_duration_distance,
-        'route_segments': route_segments_details_distance
-    }
-
-    # --- Optimization Pass 2: Fastest Travel Time ---
-    min_total_travel_duration_val = float('inf')
-    best_path_indices_time = []
-
-    for p in itertools.permutations(shop_indices):
-        current_travel_duration_for_perm = 0
-        current_path_indices = [0] + list(p) + [0] # Home -> Shops -> Home
-        valid_permutation = True
-        for i in range(len(current_path_indices) - 1):
-            u, v = current_path_indices[i], current_path_indices[i+1]
-            if cost_matrix[u][v] is None: # This check is crucial
-                valid_permutation = False
-                break
-            current_travel_duration_for_perm += cost_matrix[u][v]['duration']
-
-        if valid_permutation and current_travel_duration_for_perm < min_total_travel_duration_val:
-            min_total_travel_duration_val = current_travel_duration_for_perm
-            best_path_indices_time = current_path_indices
-
-    fastest_travel_time_route_data = None
-    if not best_path_indices_time:
-        # This might happen if somehow no valid path for time was found, though unlikely if distance one was.
-        # Or if all segments had 0 duration (highly improbable).
-        # For now, we'll allow `fastest_travel_time_route_data` to be None if no path is found.
-        # The frontend would need to handle this case.
-        pass # fastest_travel_time_route_data remains None
-    else:
-        optimized_order_objects_time = [all_points_objects[i] for i in best_path_indices_time]
-        route_segments_details_time = []
-        actual_total_distance_for_time_route = 0
-        for i in range(len(best_path_indices_time) - 1):
-            u, v = best_path_indices_time[i], best_path_indices_time[i+1]
+            
             segment_info = cost_matrix[u][v]
-            route_segments_details_time.append({
-                "from_name": all_points_objects[u]["name"], "to_name": all_points_objects[v]["name"],
-                "from_id": all_points_objects[u]["id"], "to_id": all_points_objects[v]["id"],
-                "distance": segment_info['distance'], "duration": segment_info['duration'],
-                "polyline": segment_info['polyline'], "steps": segment_info.get('steps', [])
+            total_distance += segment_info['distance']
+            total_time += segment_info['duration']
+            
+            route_segments.append({
+                "from_name": all_points_objects[u]["name"],
+                "to_name": all_points_objects[v]["name"],
+                "from_id": all_points_objects[u]["id"],
+                "to_id": all_points_objects[v]["id"],
+                "distance": segment_info['distance'],
+                "duration": segment_info['duration'],
+                "polyline": segment_info['polyline'],
+                "steps": segment_info.get('steps', [])
             })
-            actual_total_distance_for_time_route += segment_info['distance']
+        
+        if valid_route:
+            optimized_order = [all_points_objects[i] for i in current_path_indices]
+            overall_duration = total_time + total_stay_duration_val
+            
+            route_data = {
+                'optimized_order': optimized_order,
+                'total_distance': total_distance,
+                'total_travel_time': total_time,
+                'total_stay_time': total_stay_duration_val,
+                'total_overall_duration': overall_duration,
+                'route_segments': route_segments
+            }
+            
+            all_route_results.append({
+                'route_data': route_data,
+                'distance_score': total_distance,
+                'time_score': total_time,
+                'permutation': p
+            })
 
-        # total_stay_duration_val is the same as for the distance route
-        overall_total_duration_time = min_total_travel_duration_val + total_stay_duration_val
+    if not all_route_results:
+        return jsonify({'message': 'Could not find any valid routes. Check segment routing.'}), 500
 
-        fastest_travel_time_route_data = {
-            'optimized_order': optimized_order_objects_time,
-            'total_distance': actual_total_distance_for_time_route,
-            'total_travel_time': min_total_travel_duration_val,
-            'total_stay_time': total_stay_duration_val, # Same as before
-            'total_overall_duration': overall_total_duration_time,
-            'route_segments': route_segments_details_time
-        }
+    # 按距离排序，取前top_n个
+    routes_by_distance = sorted(all_route_results, key=lambda x: x['distance_score'])[:top_n]
+    shortest_distance_routes = [r['route_data'] for r in routes_by_distance]
 
-    # Filter routes based on preferred_shop_ids
-    if preferred_shop_ids:
-        preferred_shop_ids_set = set(str(shop_id) for shop_id in preferred_shop_ids) # Convert to set of strings
-
-        # Filter shortest_distance_route_data
-        if shortest_distance_route_data:
-            route_shop_ids_distance = set(
-                str(shop['id']) for shop in shortest_distance_route_data['optimized_order'] if str(shop['id']) != 'home'
-            )
-            if not preferred_shop_ids_set.issubset(route_shop_ids_distance):
-                shortest_distance_route_data = None
-
-        # Filter fastest_travel_time_route_data
-        if fastest_travel_time_route_data:
-            route_shop_ids_time = set(
-                str(shop['id']) for shop in fastest_travel_time_route_data['optimized_order'] if str(shop['id']) != 'home'
-            )
-            if not preferred_shop_ids_set.issubset(route_shop_ids_time):
-                fastest_travel_time_route_data = None
+    # 按时间排序，取前top_n个
+    routes_by_time = sorted(all_route_results, key=lambda x: x['time_score'])[:top_n]
+    fastest_travel_time_routes = [r['route_data'] for r in routes_by_time]
 
     return jsonify({
         "routes": {
-            "shortest_distance": shortest_distance_route_data,
-            "fastest_travel_time": fastest_travel_time_route_data
+            "shortest_distance_routes": shortest_distance_routes,
+            "fastest_travel_time_routes": fastest_travel_time_routes,
+            "total_combinations_analyzed": len(all_route_results)
         },
-        "message": "Successfully generated route options."
+        "message": f"Successfully generated {len(shortest_distance_routes)} distance-optimized and {len(fastest_travel_time_routes)} time-optimized route options."
     }), 200
 
 @app.route('/api/route/batch-optimize', methods=['POST'])
