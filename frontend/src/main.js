@@ -2749,9 +2749,8 @@ async getDirections() {
       this.routesByTime = [];
 
       // 处理距离最短路线
-      if (routesData.shortest_distance) {
-          const baseDistanceRoute = routesData.shortest_distance;
-          
+      const baseDistanceRoute = routesData.shortest_distance_routes && routesData.shortest_distance_routes.length > 0 ? routesData.shortest_distance_routes[0] : null;
+      if (baseDistanceRoute) {
           // 创建5个距离优化的候选路线（当前只有一个真实路线，其他为演示）
           for (let i = 0; i < 5; i++) {
               // 为演示目的，添加一些随机变化
@@ -2774,9 +2773,8 @@ async getDirections() {
       }
 
       // 处理时间最短路线
-      if (routesData.fastest_travel_time) {
-          const baseTimeRoute = routesData.fastest_travel_time;
-          
+      const baseTimeRoute = routesData.fastest_travel_time_routes && routesData.fastest_travel_time_routes.length > 0 ? routesData.fastest_travel_time_routes[0] : null;
+      if (baseTimeRoute) {
           // 创建5个时间优化的候选路线
           for (let i = 0; i < 5; i++) {
               const variation = i * 0.08; // 8%的变化
