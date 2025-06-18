@@ -1050,7 +1050,7 @@ const Dashboard = {
                        <span class="distance-value">{{ formatDistance(route.totalDistance) }}</span>
                      </div>
                    </div>
-                   <button @click="switchToRoute(routeCombinations.indexOf(route))" class="select-route-btn">选择</button>
+                   <button @click="selectRoute(route)" class="select-route-btn">选择</button>
                 </div>
               </div>
             </div>
@@ -1079,7 +1079,7 @@ const Dashboard = {
                        <span class="distance-value">{{ formatDistance(route.totalDistance) }}</span>
                      </div>
                    </div>
-                   <button @click="switchToRoute(routeCombinations.indexOf(route))" class="select-route-btn">选择</button>
+                   <button @click="selectRoute(route)" class="select-route-btn">选择</button>
                 </div>
               </div>
             </div>
@@ -1145,8 +1145,21 @@ const Dashboard = {
                  </div>
                </div>
              </div>
+             <div v-else-if="routeInfo && routeInfo.optimized_order && routeInfo.optimized_order.length > 0" class="route-order">
+               <h4><i class="icon">🚩</i> 最优访问顺序</h4>
+               <div class="order-list">
+                 <div v-for="(point, index) in routeInfo.optimized_order" :key="'order_' + index" class="order-item">
+                   <span class="order-number">{{ index + 1 }}</span>
+                   <div class="order-info">
+                     <div class="order-name">{{ point.name }}</div>
+                     <div v-if="point.address" class="order-address">{{ point.address }}</div>
+                   </div>
+                 </div>
+               </div>
+             </div>
              <div v-else class="no-route-details">
-               路线详情加载中或暂不可用...
+               <p>路线详情正在加载中...</p>
+               <p v-if="showDebugInfo">调试信息：routeInfo 结构 - {{ JSON.stringify(routeInfo, null, 2) }}</p>
              </div>
            </div>
          </div>
@@ -1186,7 +1199,7 @@ const Dashboard = {
       addressSuggestions: [],
       showAddressSuggestions: false,
       currentHomeLocation: null,
-      showDebugInfo: false, // 是否显示调试信息
+      showDebugInfo: true, // 是否显示调试信息
       
       // 添加这些变量
       homeAddressInput: '',
@@ -2757,6 +2770,12 @@ const Dashboard = {
       // 更新UI中的选中状态
       this.selectedRouteId = routeOption.id;
       
+      console.log('路线信息已更新:', {
+        routeInfo: this.routeInfo,
+        showRouteInfo: this.showRouteInfo,
+        routeSummary: this.routeSummary
+      });
+      
       const realText = routeOption.isReal ? '(真实计算)' : '(模拟数据)';
       this.showNotification(`已选择: ${routeOption.optimizationType} 第${routeOption.rank}候选路线 ${realText}`, 'info');
     },
@@ -2927,6 +2946,7 @@ const Dashboard = {
 
     // 添加格式化方法
     formatDuration(minutes) {
+      if (isNaN(minutes) || minutes < 0) return '计算中';
       if (minutes < 60) {
         return `${Math.round(minutes)}分钟`;
       }
@@ -2936,6 +2956,7 @@ const Dashboard = {
     },
 
     formatDistance(meters) {
+      if (isNaN(meters) || meters < 0) return '计算中';
       if (meters < 1000) {
         return `${Math.round(meters)}米`;
       }
@@ -4476,6 +4497,85 @@ button[type="submit"]:hover {
   .filter-panel {
     padding: 15px;
   }
+}
+
+/* 路线顺序样式 */
+.route-order {
+  background: #fff;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+  margin-top: 15px;
+}
+
+.route-order h4 {
+  margin: 0 0 15px 0;
+  color: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.1rem;
+}
+
+.order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.order-item {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 12px 15px;
+  background: #f8f9fa;
+  border-radius: 10px;
+  transition: all 0.3s ease;
+}
+
+.order-item:hover {
+  background: #e9ecef;
+  transform: translateX(5px);
+}
+
+.order-number {
+  width: 30px;
+  height: 30px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.order-info {
+  flex: 1;
+}
+
+.order-name {
+  font-weight: 600;
+  color: #2c3e50;
+  margin-bottom: 2px;
+}
+
+.order-address {
+  font-size: 0.9rem;
+  color: #6c757d;
+}
+
+.no-route-details {
+  text-align: center;
+  padding: 40px 20px;
+  color: #6c757d;
+}
+
+.no-route-details p {
+  margin: 10px 0;
+  line-height: 1.5;
 }
 
 /* 添加路线分类显示样式 */
