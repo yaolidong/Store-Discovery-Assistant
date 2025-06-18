@@ -198,7 +198,7 @@
         :disabled="!canCalculateRoute || isCalculatingRoute || (selectedTravelMode === 'public_transit' && !homeCityName)"
         class="btn-primary btn-large"
       >
-        {{ isCalculatingRoute ? 'Calculating Route...' : 'Plan My Day! (Optimized Route)' }}
+        {{ getButtonText }}
       </button>
       <p v-if="!canCalculateRoute && !isCalculatingRoute" class="route-calculation-condition">
         Please set your home location, confirm at least one shop, and specify city if using transit, to enable route calculation.
@@ -235,8 +235,9 @@
                   <div class="stat-primary">
                     <span class="stat-value">{{ Math.round(route.total_overall_duration / 60) }}</span> 分钟
                   </div>
-                  <div class="stat-secondary">
-                    <span class="stat-value">{{ (route.total_distance / 1000).toFixed(2) }}</span> 公里
+                  <div class="stat-secondary" v-if="route.cost">
+                    <span class="stat-icon">💰</span>
+                    <span class="stat-value">{{ route.cost }}</span> 元
                   </div>
                 </div>
                 <div class="candidate-route">
@@ -248,7 +249,7 @@
             </div>
             <div v-else class="no-routes">
               <span class="icon">☹️</span>
-              <p>未找到时间最优路线</p>
+              <p>未能找到按时间优化的路线。</p>
             </div>
           </div>
 
@@ -273,8 +274,9 @@
                   <div class="stat-primary">
                     <span class="stat-value">{{ (route.total_distance / 1000).toFixed(2) }}</span> 公里
                   </div>
-                  <div class="stat-secondary">
-                    <span class="stat-value">{{ Math.round(route.total_overall_duration / 60) }}</span> 分钟
+                  <div class="stat-secondary" v-if="route.cost">
+                    <span class="stat-icon">💰</span>
+                    <span class="stat-value">{{ route.cost }}</span> 元
                   </div>
                 </div>
                 <div class="candidate-route">
@@ -286,11 +288,44 @@
             </div>
             <div v-else class="no-routes">
               <span class="icon">☹️</span>
-              <p>未找到距离最优路线</p>
+              <p>未能找到按距离优化的路线。</p>
             </div>
           </div>
         </div>
       </div>
+
+      <!-- NEW: Route Candidates for A-to-B -->
+      <div v-if="isCalculatingRoute && routeCandidates.length === 0" class="loading-routes-indicator">
+        <p>正在为您寻找最佳路线，请稍候...</p>
+      </div>
+      <div v-if="routeCandidates.length > 0" class="route-candidates-container">
+        <h3>请选择一条路线方案</h3>
+        <ul class="route-candidates-list">
+          <li 
+            v-for="(route, index) in routeCandidates" 
+            :key="route.id" 
+            class="route-candidate-item"
+            :class="{ selected: selectedRouteId === route.id }"
+            @click="selectRouteCandidate(route.id)"
+          >
+            <div class="candidate-item-header">
+              <span class="candidate-rank">方案 #{{ index + 1 }}</span>
+              <strong class="candidate-summary">{{ route.summary }}</strong>
+            </div>
+            <div class="candidate-item-stats">
+              <div class="stat-primary">
+                <span class="stat-icon">⏱️</span>
+                <span class="stat-value">{{ Math.round(route.duration / 60) }}</span> 分钟
+              </div>
+              <div class="stat-secondary">
+                <span class="stat-icon">📏</span>
+                <span class="stat-value">{{ (route.distance / 1000).toFixed(2) }}</span> 公里
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+
     </div>
 
     <hr class="separator"/>
@@ -340,6 +375,7 @@
 <script>
 import MapDisplay from './MapDisplay.vue';
 import axios from 'axios';
+import { debounce } from 'lodash';
 
 export default {
   name: 'Dashboard',
@@ -388,10 +424,12 @@ export default {
       
       // UI state for selected route
       selectedRouteId: null,      // The ID of the currently selected route candidate
-      currentSelectedRoute: null, // The full object of the selected route
+      selectedRoute: null,        // The full object of the selected route
       displayableSchedule: null,  // The schedule for the selected route
       
       showMap: false,
+      routeCandidates: [],        // NEW: For A-to-B route options
+      isFetchingDetails: false,   // NEW: For fetching details of a selected candidate
     };
   },
   computed: {
@@ -402,6 +440,51 @@ export default {
       const homeSet = this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude;
       const confirmedShopsExist = this.shopsToVisit.some(shop => shop.status === 'confirmed');
       return homeSet && confirmedShopsExist;
+    },
+    mapCenter() {
+      if (this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude) {
+        return [this.currentHomeLocation.longitude, this.currentHomeLocation.latitude];
+      }
+      return [121.4737, 31.2304]; // Default to Shanghai
+    },
+    mapMarkers() {
+      const markers = [];
+
+      // Add home marker if location is set
+      if (this.currentHomeLocation && this.currentHomeLocation.latitude && this.currentHomeLocation.longitude) {
+        markers.push({
+          id: 'home',
+          position: [this.currentHomeLocation.longitude, this.currentHomeLocation.latitude],
+          label: 'Home',
+          color: 'blue'
+        });
+      }
+
+      // Add markers for confirmed shops
+      this.shopsToVisit.forEach(shop => {
+        if (shop.status === 'confirmed' && shop.latitude && shop.longitude) {
+          markers.push({
+            id: shop.id,
+            position: [shop.longitude, shop.latitude],
+            label: shop.name,
+            color: 'red'
+          });
+        }
+      });
+      
+      return markers;
+    },
+    routePolyline() {
+      if (this.selectedRoute && this.selectedRoute.polyline) {
+        return this.selectedRoute.polyline;
+      }
+      return '';
+    },
+    routeSteps() {
+      if (this.selectedRoute && this.selectedRoute.steps) {
+        return this.selectedRoute.steps;
+      }
+      return [];
     }
   },
   methods: {
@@ -538,28 +621,116 @@ export default {
           }
       });
     },
-    getDirections() {
-      if (this.isCalculatingRoute || !this.canCalculateRoute) return;
-      this.isCalculatingRoute = true;
-      // Reset state for new results
+    getButtonText() {
+      const confirmedShops = this.shopsToVisit.filter(s => s.status === 'confirmed').length;
+      if (this.isCalculatingRoute || this.isFetchingDetails) {
+        return "Calculating...";
+      }
+      if (confirmedShops === 1) {
+        return "获取路线";
+      }
+      return "规划我的行程 (多站优化)";
+    },
+    async getDirections() {
+      if (!this.canCalculateRoute || this.isCalculatingRoute) return;
+
+      // Reset previous results
       this.routesByTime = [];
       this.routesByDistance = [];
+      this.selectedRoute = null;
       this.selectedRouteId = null;
-      this.currentSelectedRoute = null;
-      this.displayableSchedule = null;
-      if (this.$refs.mapDisplay) {
-         this.$refs.mapDisplay.clearMapElements();
+      this.routeCandidates = [];
+
+      const confirmedShops = this.shopsToVisit.filter(s => s.status === 'confirmed');
+      
+      this.isCalculatingRoute = true;
+
+      // New logic for A-to-B routing (single destination)
+      if (confirmedShops.length === 1) {
+        try {
+          const destination = confirmedShops[0];
+          const payload = {
+            origin: {
+              latitude: this.currentHomeLocation.latitude,
+              longitude: this.currentHomeLocation.longitude,
+            },
+            destination: {
+              latitude: destination.latitude,
+              longitude: destination.longitude,
+            },
+            mode: this.selectedTravelMode,
+            city: this.homeCityName,
+          };
+
+          const response = await fetch('http://localhost:5000/api/route/directions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || 'Failed to fetch route candidates.');
+          }
+
+          const candidates = await response.json();
+          if (candidates.length === 0) {
+            alert('未能找到符合条件的路线。');
+          }
+          this.routeCandidates = candidates;
+
+        } catch (error) {
+          console.error('Error getting directions:', error);
+          alert(`获取路线失败: ${error.message}`);
+        } finally {
+          this.isCalculatingRoute = false;
+        }
+      } else {
+        // Fallback to existing TSP logic for multiple shops
+        this.optimizeRoute();
       }
-      const confirmedShops = this.shopsToVisit
-        .filter(shop => shop.status === 'confirmed')
-        .map(shop => ({
-            id: shop.id,
-            name: shop.name,
-            latitude: shop.latitude,
-            longitude: shop.longitude,
-            amap_id: shop.amap_id,
-            stay_duration: (shop.stayDurationMinutes || 0) * 60
-        }));
+    },
+    async selectRouteCandidate(routeId) {
+      if (this.isFetchingDetails) return;
+      this.isFetchingDetails = true;
+      this.selectedRoute = null;
+
+      try {
+        const response = await fetch(`http://localhost:5000/api/route/directions/${routeId}`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch route details.');
+        }
+        this.selectedRoute = await response.json();
+        this.selectedRouteId = routeId;
+        
+        // Hide the candidates list after selection to show the map and details
+        // this.routeCandidates = []; 
+      } catch (error) {
+        console.error('Error selecting route candidate:', error);
+        alert('Could not load route details. Please try again.');
+        this.selectedRouteId = null;
+      } finally {
+        this.isFetchingDetails = false;
+      }
+    },
+    async optimizeRoute() {
+      // This method now contains the original logic for multi-stop optimization
+      if (!this.canCalculateRoute || this.isCalculatingRoute) return;
+
+      this.isCalculatingRoute = true;
+      this.routesByTime = [];
+      this.routesByDistance = [];
+      this.selectedRoute = null;
+      this.selectedRouteId = null;
+
+      const confirmedShops = this.shopsToVisit.filter(s => s.status === 'confirmed').map(shop => ({
+        id: shop.id,
+        name: shop.name,
+        latitude: shop.latitude,
+        longitude: shop.longitude,
+        stay_duration: (shop.stayDurationMinutes || 0) * 60, // Convert to seconds
+      }));
+
       const payload = {
         home_location: {
           latitude: this.currentHomeLocation.latitude,
@@ -567,60 +738,60 @@ export default {
         },
         shops: confirmedShops,
         mode: this.selectedTravelMode,
-        city: this.selectedTravelMode === 'public_transit' ? this.homeCityName.trim() : this.selectedCity
+        city: this.selectedTravelMode === 'public_transit' ? this.homeCityName : undefined,
+        top_n: 5, // Request top 5 for both time and distance
       };
       
-      axios.post('/api/route/optimize', payload)
-        .then(response => {
-          console.log("API Response received:", response.data);
-
-          const timeRoutes = (response.data.routes?.fastest_travel_time_routes || []).map((route, index) => ({ ...route, id: `time-${index}` }));
-          const distanceRoutes = (response.data.routes?.shortest_distance_routes || []).map((route, index) => ({ ...route, id: `distance-${index}` }));
-
-          // Use this.$set to ensure reactivity
-          this.$set(this, 'routesByTime', timeRoutes);
-          this.$set(this, 'routesByDistance', distanceRoutes);
-          
-          console.log("Data assigned to component state. Forcing UI update...", {
-            routesByTime: this.routesByTime,
-            routesByDistance: this.routesByDistance
-          });
-
-          // Force Vue to re-render the component.
-          this.$forceUpdate(); // Keep this if it's helping with reactivity for the candidate lists
-
-          // Ensure no default selection is made here.
-          // The user will now need to click a candidate to see details.
-          if (timeRoutes.length === 0 && distanceRoutes.length === 0) {
-            alert("No valid routes found."); // Keep alert if absolutely no routes are returned.
-          }
-        })
-        .catch(error => {
-          console.error('Error calculating optimized route:', error);
-          // Ensure states are reset even on error, though `finally` handles `isCalculatingRoute`
-          this.routesByTime = [];
-          this.routesByDistance = [];
-          this.selectedRouteId = null;
-          this.currentSelectedRoute = null;
-          this.displayableSchedule = null;
-          alert('Error calculating route: ' + (error.response?.data?.message || 'Server error'));
-        })
-        .finally(() => {
-          this.isCalculatingRoute = false;
+      try {
+        const response = await fetch('http://localhost:5000/api/route/optimize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || 'Failed to calculate optimized route.');
+        }
+
+        const result = await response.json();
+        this.routesByTime = this.processRoutes(result.routes.fastest_travel_time_routes);
+        this.routesByDistance = this.processRoutes(result.routes.shortest_distance_routes);
+        // 不自动选择路线，让用户从候选列表中选择
+        this.selectedRoute = null;
+        this.selectedRouteId = null;
+        this.displayableSchedule = null;
+        this.showRouteInfo = false;
+      
+        const totalRoutes = this.routesByTime.length + this.routesByDistance.length;
+        this.showNotification(`🎉 成功获取 ${totalRoutes} 条候选路线! 请从下方列表中选择一条路线`, 'success');
+        if (this.routesByTime.length > 0) {
+          this.selectRoute(this.routesByTime[0]);
+        } else if (this.routesByDistance.length > 0) {
+          this.selectRoute(this.routesByDistance[0]);
+        }
+
+      } catch (error) {
+        console.error('Error optimizing route:', error);
+        alert(`Error: ${error.message}`);
+      } finally {
+        this.isCalculatingRoute = false;
+      }
+    },
+    processRoutes(routes) {
+      return routes.map(route => {
+        if (route.optimized_order && route.route_segments) {
+          route.optimized_order = route.optimized_order.map(p => ({
+            ...p,
+            stay_duration: route.route_segments.find(s => s.to_name === p.name)?.duration || 0
+          }));
+        }
+        return route; // Return the original object if no processing is needed
+      });
     },
     selectRoute(route) {
-      console.log("Attempting to select route:", route);
-      if (!route || !route.id) {
-        console.error("Invalid route object passed to selectRoute.", route);
-        return;
-      }
-      this.selectedRouteId = route.id;
-      this.currentSelectedRoute = route;
-      console.log("State after selecting route:", {
-        selectedRouteId: this.selectedRouteId,
-      });
-      this.displayRouteOnMap(route);
+      this.selectedRoute = route;
+      this.selectedRouteId = route.id; // Assuming route object has a unique 'id'
     },
     generateDisplaySchedule(routeData) {
       if (!routeData || !routeData.optimized_order || !routeData.route_segments) return [];
@@ -732,6 +903,7 @@ export default {
     },
     onCityChange() {
       if (this.selectedCity) {
+        this.homeCityName = this.selectedCity;
         localStorage.setItem('selectedCity', this.selectedCity);
         if (this.$refs.mapDisplay) {
           const coords = this.getCityCoordinates(this.selectedCity);
@@ -767,7 +939,16 @@ export default {
 };
 </script>
 <style scoped>
-/* Add styling for .map-display-component if needed, e.g., margin */
+.dashboard-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+  font-family: 'Avenir', Helvetica, Arial, sans-serif;
+  color: #2c3e50;
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  grid-gap: 30px;
+}
 .placeholder-message-section {
   background-color: #f0f8ff; /* Light Alice Blue, similar to schedule display */
   padding: 20px;
@@ -980,31 +1161,6 @@ export default {
   font-style: italic;
   text-align: center;
   margin-top: 15px;
-}
-.dashboard-container {
-  max-width: 800px;
-  margin: 30px auto;
-  padding: 25px;
-  text-align: left;
-  background-color: #f9f9f9;
-  border: 1px solid #eee;
-  border-radius: 8px;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-}
-h2 {
-  text-align: center;
-  color: #333;
-  margin-bottom: 25px;
-}
-h3 {
-  color: #444;
-  margin-top: 20px;
-  margin-bottom: 15px;
-}
-p {
-  color: #555;
-  line-height: 1.6;
-  margin-bottom: 10px;
 }
 .home-location-section {
   background-color: #fff;
@@ -1457,18 +1613,7 @@ input[type="text"] {
 
 /* 店铺标签 */
 .candidate-shops {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.shop-badge {
-  background: #e9ecef;
-  color: #495057;
-  padding: 3px 8px;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: 500;
+  display: none;
 }
 
 .route-candidate.selected .shop-badge {
@@ -1579,5 +1724,101 @@ input[type="text"] {
   .comparison-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* --- Route Candidate Specific Styles --- */
+.route-candidates-container {
+  margin-top: 20px;
+  border: 1px solid #ddd;
+  padding: 15px;
+  border-radius: 8px;
+  background-color: #f9f9f9;
+}
+
+.route-candidates-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.route-candidate-item {
+  padding: 15px;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  background-color: #fff;
+  transition: all 0.2s ease-in-out;
+}
+
+.route-candidate-item:hover {
+  border-color: #007bff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.route-candidate-item.selected {
+  border-color: #28a745;
+  background-color: #e9f5ec;
+  box-shadow: 0 0 10px rgba(40, 167, 69, 0.3);
+}
+
+.candidate-item-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.candidate-rank {
+  background-color: #007bff;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  margin-right: 10px;
+}
+
+.candidate-summary {
+  font-weight: bold;
+}
+
+.candidate-item-stats {
+  display: flex;
+  gap: 20px;
+  font-size: 0.95em;
+  color: #555;
+}
+
+.stat-primary, .stat-secondary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.stat-icon {
+  font-size: 1.1em;
+}
+
+.loading-routes-indicator {
+  text-align: center;
+  padding: 20px;
+  font-size: 1.2em;
+  color: #555;
+}
+
+/* Add some spacing and alignment to buttons in a row */
+.home-form .form-group + .btn-primary,
+.home-form .btn-primary + .btn-secondary {
+  margin-left: 10px;
+}
+
+.shop-item-actions button + button {
+  margin-left: 8px;
+}
+
+/* 强制隐藏所有路线卡片中的店铺标签 */
+.candidate-shops,
+.candidate-item-tags {
+  display: none !important;
 }
 </style>

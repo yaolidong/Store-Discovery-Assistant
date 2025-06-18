@@ -198,712 +198,608 @@ const MapDisplayComp = {
   data() {
     return {
       map: null,
-      markers: [], // Store multiple markers
-      driving: null, // For route display
+      markers: [],
+      driving: null,
       homeMarker: null,
-      shopMarkers: []
+      shopMarkers: [],
+      isInitialized: false,
+      isInitializing: false,
+      initRetryCount: 0,
+      maxInitRetries: 5
     };
   },
-  mounted() {
-    if (window.AMap) {
-      this.initMap();
-    } else {
-      console.error("Gaode Maps API not loaded for MapDisplayComp. Ensure the script tag is in index.html and the key is valid.");
-      // Poll for AMap availability
-      let attempts = 0;
-      const interval = setInterval(() => {
-        attempts++;
-        if (window.AMap) {
-          this.initMap();
-          clearInterval(interval);
-        } else if (attempts > 10) { // Try for a few seconds
-          clearInterval(interval);
-          console.error("Gaode Maps API failed to load after multiple attempts.");
-          this.$emit('notify', '地图服务加载失败，请检查网络连接', 'error');
-        }
-      }, 500);
-    }
+  
+  async mounted() {
+    await this.initializeMap();
   },
+  
   methods: {
-    initMap() {
+    // 改进的地图初始化方法
+    async initializeMap() {
+      if (this.isInitializing || this.isInitialized) {
+        return;
+      }
+      
+      this.isInitializing = true;
+      
       try {
-        // Ensure container ID matches the template
+        // 等待高德地图API加载
+        await this.waitForAmapAPI();
+        
+        // 初始化地图
         this.map = new AMap.Map('map-container-js', {
           zoom: 11,
-          center: [116.397428, 39.90923], // Default to Beijing
+          center: [116.397428, 39.90923],
           resizeEnable: true,
-          // 添加canvas性能优化
-          canvas: {
-            willReadFrequently: true
-          }
+          mapStyle: 'amap://styles/normal',
+          features: ['bg', 'point', 'road', 'building'],
+          viewMode: '2D'
         });
 
-        // 加载插件
-        AMap.plugin(['AMap.ToolBar', 'AMap.Scale'], () => {
-          try {
-            this.map.addControl(new AMap.ToolBar());
-            this.map.addControl(new AMap.Scale());
-            console.log("MapDisplayComp: Map controls added successfully");
-          } catch (error) {
-            console.error("Error adding map controls:", error);
-            this.$emit('notify', '地图控件加载失败，部分功能可能受限', 'warning');
-          }
-        }, (error) => {
-          console.error("Error loading map plugins:", error);
-          this.$emit('notify', '地图插件加载失败，部分功能可能受限', 'warning');
-        });
-
-        console.log("MapDisplayComp: Map initialized with container 'map-container-js'");
+        // 等待地图完全加载
+        await this.waitForMapReady();
+        
+        // 加载地图插件
+        await this.loadMapPlugins();
+        
+        this.isInitialized = true;
+        this.initRetryCount = 0;
+        console.log("地图初始化成功");
+        
+        // 触发初始化完成事件
+        this.$emit('mapInitialized', this.map);
+        
       } catch (error) {
-        console.error("Error initializing map:", error);
+        console.error("地图初始化失败:", error);
+        await this.handleInitializationError(error);
+      } finally {
+        this.isInitializing = false;
+      }
+    },
+    
+    // 等待高德地图API加载
+    waitForAmapAPI() {
+      return new Promise((resolve, reject) => {
+        const checkAmap = () => {
+          if (window.AMap) {
+            resolve();
+          } else if (this.initRetryCount < this.maxInitRetries) {
+            this.initRetryCount++;
+            setTimeout(checkAmap, 1000);
+          } else {
+            reject(new Error('高德地图API加载超时'));
+          }
+        };
+        checkAmap();
+      });
+    },
+    
+    // 等待地图准备就绪
+    waitForMapReady() {
+      return new Promise((resolve) => {
+        if (this.map) {
+          this.map.on('complete', () => {
+            resolve();
+          });
+        } else {
+          resolve();
+        }
+      });
+    },
+    
+    // 加载地图插件
+    async loadMapPlugins() {
+      return new Promise((resolve, reject) => {
+        AMap.plugin(['AMap.ToolBar', 'AMap.Scale', 'AMap.Driving'], () => {
+          try {
+            // 添加地图控件
+            this.map.addControl(new AMap.ToolBar({
+              position: 'RB'
+            }));
+            this.map.addControl(new AMap.Scale({
+              position: 'LB'
+            }));
+            
+            console.log("地图插件加载成功");
+            resolve();
+          } catch (error) {
+            console.error("地图插件加载失败:", error);
+            reject(error);
+          }
+        });
+      });
+    },
+    
+    // 处理初始化错误
+    async handleInitializationError(error) {
+      if (this.initRetryCount < this.maxInitRetries) {
+        console.log(`地图初始化失败，${2}秒后重试 (${this.initRetryCount + 1}/${this.maxInitRetries})`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await this.initializeMap();
+      } else {
+        this.$emit('mapInitializationFailed', error);
         this.$emit('notify', '地图初始化失败，请刷新页面重试', 'error');
       }
     },
     
-    clearAllMarkers() {
-      // 清除所有标记
-      if (this.homeMarker) {
-        this.map.remove(this.homeMarker);
-        this.homeMarker = null;
+    // 安全的清除操作
+    clearAllMarkersAndRoutes() {
+      if (!this.isInitialized || !this.map) {
+        return;
       }
-      this.shopMarkers.forEach(marker => {
-        this.map.remove(marker);
-      });
-      this.shopMarkers = [];
-      if (this.markers) {
-        this.markers.forEach(m => this.map.remove(m));
-        this.markers = [];
+      
+      try {
+        // 清除路线
+        if (this.driving) {
+          this.driving.clear();
+          this.driving = null;
+        }
+        
+        // 清除家的标记
+        if (this.homeMarker) {
+          this.map.remove(this.homeMarker);
+          this.homeMarker = null;
+        }
+        
+        // 清除店铺标记
+        this.shopMarkers.forEach(marker => {
+          try {
+            this.map.remove(marker);
+          } catch (e) {
+            console.warn('移除店铺标记失败:', e);
+          }
+        });
+        this.shopMarkers = [];
+        
+        // 清除其他标记
+        if (this.markers) {
+          this.markers.forEach(marker => {
+            try {
+              this.map.remove(marker);
+            } catch (e) {
+              console.warn('移除标记失败:', e);
+            }
+          });
+          this.markers = [];
+        }
+        
+        console.log("地图清除完成");
+        
+      } catch (error) {
+        console.error("清除地图元素时出错:", error);
       }
-      this.clearRoute && this.clearRoute(); // 清除旧的路线图层
     },
     
-    clearRoute() {
-      if (this.driving) {
-        this.driving.clear();
-        console.log("MapDisplayComp: Previous route cleared.");
+    // 改进的设置家位置方法
+    async setHomeLocation(longitude, latitude, address) {
+      if (!this.isInitialized) {
+        console.warn("地图未初始化，等待初始化完成");
+        await this.waitForInitialization();
       }
-    },
-    
-    setHomeLocation(longitude, latitude, address) {
-      // 添加数据验证
+      
+      // 数据验证
       const lng = parseFloat(longitude);
       const lat = parseFloat(latitude);
       
       if (isNaN(lng) || isNaN(lat)) {
         console.error('无效的经纬度数据:', { longitude, latitude, address });
-        // 可以在这里添加用户提示，例如：
-        // this.showNotification('设置家的位置失败，经纬度无效。', 'error');
-        return; // 提前返回，避免后续错误
+        this.$emit('notify', '家的位置坐标无效', 'error');
+        return false;
       }
       
-      if (!this.map) {
-        console.error("MapDisplayComp: Map not initialized when setHomeLocation called.");
-        return;
-      }
-      
-      // 更新状态 (如果这个组件也管理这些状态的话)
-      // this.homeAddress = address;
-      // this.homeLocation = {
-      //   longitude: lng,
-      //   latitude: lat
-      // };
-      
-      // Clear existing home marker
-      if (this.homeMarker) {
-        this.map.remove(this.homeMarker);
-      }
-      
-      // Create home marker with different icon
-      const position = new AMap.LngLat(lng, lat); // 现在 lng 和 lat 是有效的数字
-      this.homeMarker = new AMap.Marker({
-        position: position,
-        title: `家: ${address}`,
-        icon: new AMap.Icon({
-          size: new AMap.Size(25, 34),
-          image: 'https://webapi.amap.com/theme/v1.3/markers/n/mark_r.png'
-        })
-      });
-      this.map.add(this.homeMarker);
-      
-      // Center map on home
-      this.map.setCenter(position);
-      this.map.setZoom(14);
-      
-      this.updateMapView(); // 确保这个方法存在或者按需调用
-    },
-    
-    addShopMarker(shop) {
-      if (!this.map || !shop.longitude || !shop.latitude) {
-        console.error("MapDisplayComp: Map not initialized or shop missing coordinates");
-        return;
-      }
-      
-      const position = new AMap.LngLat(shop.longitude, shop.latitude);
-      const marker = new AMap.Marker({
-        position: position,
-        title: `店铺: ${shop.name}`,
-        icon: new AMap.Icon({
-          size: new AMap.Size(25, 34),
-          image: 'https://webapi.amap.com/theme/v1.3/markers/n/mark_b.png'
-        })
-      });
-      
-      // Store shop info in marker
-      marker.shopInfo = shop;
-      
-      this.map.add(marker);
-      this.shopMarkers.push(marker);
-      
-      this.updateMapView();
-    },
-    
-    removeShopMarker(shopId) {
-      const markerIndex = this.shopMarkers.findIndex(marker => 
-        marker.shopInfo && marker.shopInfo.id === shopId
-      );
-      
-      if (markerIndex !== -1) {
-        const marker = this.shopMarkers[markerIndex];
-        this.map.remove(marker);
-        this.shopMarkers.splice(markerIndex, 1);
-        this.updateMapView();
-      }
-    },
-    
-    updateMapView() {
-      // Auto-fit the map to show all markers
-      const allMarkers = [...this.shopMarkers];
-      if (this.homeMarker) {
-        allMarkers.push(this.homeMarker);
-      }
-      
-      if (allMarkers.length > 1) {
-        this.map.setFitView(allMarkers, false, [20, 20, 20, 20]);
-      } else if (allMarkers.length === 1) {
-        this.map.setCenter(allMarkers[0].getPosition());
-        this.map.setZoom(15);
-      }
-    },
-    
-    async optimizeRouteOrder(homePosition, shops, travelMode) {
-      // 简化的路线优化算法 - 使用最近邻算法
-      if (shops.length <= 1) {
-        return shops;
-      }
-
-      const unvisited = [...shops];
-      const optimizedRoute = [];
-      let currentPos = homePosition;
-
-      while (unvisited.length > 0) {
-        let nearest = unvisited[0];
-        let minDistance = AMap.GeometryUtil.distance(
-          currentPos, 
-          new AMap.LngLat(nearest.longitude, nearest.latitude)
-        );
-
-        for (let i = 1; i < unvisited.length; i++) {
-          const shop = unvisited[i];
-          const distance = AMap.GeometryUtil.distance(
-            currentPos,
-            new AMap.LngLat(shop.longitude, shop.latitude)
-          );
-          
-          if (distance < minDistance) {
-            nearest = shop;
-            minDistance = distance;
-          }
-        }
-
-        optimizedRoute.push(nearest);
-        currentPos = new AMap.LngLat(nearest.longitude, nearest.latitude);
-        unvisited.splice(unvisited.indexOf(nearest), 1);
-      }
-
-      console.log('路线优化完成:', optimizedRoute.map(s => s.name));
-      return optimizedRoute;
-    },
-
-    async displayRoute(homeAddress, shops, travelMode = 'DRIVING') {
-      if (!this.map) {
-        this.$emit('notify', '地图未初始化，请稍候再试', 'error');
-            return;
-          }
-
-      console.log(`开始智能路线规划: 家地址=${homeAddress}, 店铺数量=${shops.length}, 出行方式=${travelMode}`);
-      
-      this.clearRoute();
-
-      if (!homeAddress || !shops.length) {
-        this.$emit('notify', '需要家的地址和至少一个店铺才能规划路线', 'warning');
-          return;
-        }
-
-      // 验证所有店铺都有坐标信息
-      const invalidShops = shops.filter(shop => !shop.longitude || !shop.latitude);
-      if (invalidShops.length > 0) {
-        this.$emit('notify', `以下店铺位置信息不完整: ${invalidShops.map(s => s.name).join(', ')}`, 'error');
-        return;
-      }
-
-      // 获取起点坐标
-      const startPos = this.homeMarker ? this.homeMarker.getPosition() : null;
-      
-      // 执行智能路线规划的函数
-      const performSmartRouting = async (homePosition) => {
-        try {
-          // 优化店铺访问顺序
-          const optimizedShops = await this.optimizeRouteOrder(homePosition, shops, travelMode);
-          
-          if (travelMode === 'DRIVING') {
-            await this.planDrivingRoute(homePosition, optimizedShops);
-          } else {
-            await this.planTransitRoute(homePosition, optimizedShops);
-          }
-        } catch (error) {
-          console.error('智能路线规划失败:', error);
-          this.$emit('notify', `路线规划失败: ${error.message}`, 'error');
-        }
-      };
-
-      // 如果有家的标记，直接使用坐标
-      if (startPos) {
-        await performSmartRouting(startPos);
-      } else {
-        // 否则先进行地理编码
-        console.log('需要对家地址进行地理编码:', homeAddress);
-        
-        if (!window.AMap || !AMap.Geocoder) {
-          this.$emit('notify', '地理编码服务不可用', 'error');
-        return;
-      }
-
-      const geocoder = new AMap.Geocoder();
-        geocoder.getLocation(homeAddress, async (status, result) => {
-          console.log('地理编码结果:', { status, result });
-          
-          if (status === 'complete' && result.info === 'OK' && result.geocodes && result.geocodes.length > 0) {
-            const homePosition = result.geocodes[0].location;
-            console.log('地理编码成功:', homePosition);
-            await performSmartRouting(homePosition);
-          } else {
-            const errorMsg = result ? result.info || '地址解析失败' : '地理编码失败';
-            console.error('地理编码失败:', { status, error: errorMsg, result });
-            this.$emit('notify', `无法解析家的地址: ${errorMsg}`, 'error');
-          }
-        });
-      }
-    },
-
-    async planDrivingRoute(homePosition, optimizedShops) {
-      console.log('开始规划驾车路线...');
-      
-      if (!window.AMap) {
-        throw new Error('高德地图API未加载');
-      }
-
-      // 创建驾车路线规划实例
-              this.driving = new AMap.Driving({
-                map: this.map,
-        policy: AMap.DrivingPolicy.LEAST_TIME,
-        hideMarkers: true // 隐藏默认标记，使用我们自己的
-      });
-
-      // 构建完整路径：家 -> 店铺1 -> 店铺2 -> ... -> 家
-      const waypoints = [homePosition];
-      optimizedShops.forEach(shop => {
-        waypoints.push(new AMap.LngLat(shop.longitude, shop.latitude));
-      });
-      waypoints.push(homePosition); // 返回家
-
-      console.log('驾车路径点:', waypoints);
-
-      // 执行路线搜索
-      return new Promise((resolve, reject) => {
-        this.driving.search(waypoints, (status, result) => {
-          console.log('驾车路线搜索结果:', { status, result });
-          
-          if (status === 'complete' && result.info === 'OK' && result.routes && result.routes.length > 0) {
-            const route = result.routes[0];
-            console.log('驾车路线规划成功:', route);
-            
-            // 计算总时间和距离
-            let totalDistance = 0;
-            let totalTime = 0;
-            
-            if (route.steps) {
-              route.steps.forEach(step => {
-                totalDistance += step.distance || 0;
-                totalTime += step.time || 0;
-              });
-            } else {
-              totalDistance = route.distance || 0;
-              totalTime = route.time || 0;
-            }
-
-            // 生成详细的驾车指导
-            const instructions = this.generateDrivingInstructions(optimizedShops, route);
-            
-            // 发送路线信息到父组件
-            this.$emit('routeCalculated', {
-              distance: totalDistance,
-              time: totalTime,
-              shops: optimizedShops,
-              travelMode: 'DRIVING',
-              instructions: instructions,
-              route: route
-            });
-            
-            resolve();
-              } else {
-            const errorMsg = result ? result.info || '路线规划服务暂时不可用' : '驾车路线规划失败';
-            console.error('驾车路线规划失败:', { status, error: errorMsg, result });
-            
-            // 如果API失败，使用备用方案
-            this.fallbackDrivingRoute(homePosition, optimizedShops);
-            resolve();
-          }
-        });
-      });
-    },
-
-    fallbackDrivingRoute(homePosition, optimizedShops) {
-      console.log('使用备用驾车路线规划...');
-      
-      // 使用直线距离估算
-      let totalDistance = 0;
-      let totalTime = 0;
-      let currentPos = homePosition;
-      
-      const instructions = ['🏠 从家出发'];
-      
-      optimizedShops.forEach((shop, index) => {
-        const shopPos = new AMap.LngLat(shop.longitude, shop.latitude);
-        const distance = AMap.GeometryUtil.distance(currentPos, shopPos);
-        const time = Math.round(distance / 30 * 60); // 假设平均速度30米/分钟（考虑城市交通）
-        
-        totalDistance += distance;
-        totalTime += time;
-        
-        instructions.push(`🚗 驾车前往 ${shop.name}（约${Math.round(distance)}米，${Math.round(time/60)}分钟）`);
-        instructions.push(`📍 到达 ${shop.name} - ${shop.address}`);
-        
-        currentPos = shopPos;
-      });
-      
-      // 返回家
-      const returnDistance = AMap.GeometryUtil.distance(currentPos, homePosition);
-      const returnTime = Math.round(returnDistance / 30 * 60);
-      totalDistance += returnDistance;
-      totalTime += returnTime;
-      
-      instructions.push(`🚗 返回家（约${Math.round(returnDistance)}米，${Math.round(returnTime/60)}分钟）`);
-      instructions.push('🏠 到达家，探店行程结束');
-      
-      // 在地图上绘制简化路线
-      this.drawSimpleRoute(homePosition, optimizedShops);
-      
-      this.$emit('routeCalculated', {
-        distance: totalDistance,
-        time: totalTime,
-        shops: optimizedShops,
-        travelMode: 'DRIVING',
-        instructions: instructions,
-        isEstimated: true
-      });
-    },
-
-    async planTransitRoute(homePosition, optimizedShops) {
-      console.log('开始规划公交路线...');
-      
-      let totalDistance = 0;
-      let totalTime = 0;
-      let currentPos = homePosition;
-      const instructions = ['🏠 从家出发'];
-      const segments = [];
-      
-      for (let i = 0; i < optimizedShops.length; i++) {
-        const shop = optimizedShops[i];
-        const shopPos = new AMap.LngLat(shop.longitude, shop.latitude);
-        
-        try {
-          // 使用高德地图公交路径规划API
-          const transit = new AMap.Transit({
-            map: this.map,
-            city: this.selectedCity || '北京', // 默认北京
-            policy: AMap.TransitPolicy.LEAST_TIME, // 最快捷模式
-            nightflag: false, // 不考虑夜班车
-            extensions: 'all' // 返回详细信息
-          });
-
-          const segment = await new Promise((resolve, reject) => {
-            transit.search(currentPos, shopPos, (status, result) => {
-              if (status === 'complete' && result.info === 'OK') {
-                const route = result.routes[0]; // 获取最优路线
-                const segmentInfo = {
-                  distance: route.distance,
-                  time: route.time,
-                  instructions: []
-                };
-
-                // 解析换乘信息
-                route.transits.forEach(transit => {
-                  transit.segments.forEach(segment => {
-                    if (segment.walking) {
-                      segmentInfo.instructions.push(
-                        `🚶 步行 ${Math.round(segment.walking.distance)}米 到 ${segment.walking.destination}`
-                      );
-                    }
-                    if (segment.bus) {
-                      const busInfo = segment.bus;
-                      segmentInfo.instructions.push(
-                        `🚌 乘坐 ${busInfo.name} 从 ${busInfo.departure_stop.name} 到 ${busInfo.arrival_stop.name}`
-                      );
-                      if (busInfo.via_stops && busInfo.via_stops.length > 0) {
-                        segmentInfo.instructions.push(
-                          `  途经 ${busInfo.via_stops.length} 站`
-                        );
-                      }
-                    }
-                    if (segment.railway) {
-                      const railInfo = segment.railway;
-                      segmentInfo.instructions.push(
-                        `🚇 乘坐 ${railInfo.name} 从 ${railInfo.departure_stop.name} 到 ${railInfo.arrival_stop.name}`
-                      );
-                    }
-                  });
-                });
-
-                resolve(segmentInfo);
-              } else {
-                reject(new Error(result ? result.info : '公交路线规划失败'));
-              }
-            });
-          });
-
-          instructions.push(...segment.instructions);
-          totalDistance += segment.distance;
-          totalTime += segment.time;
-          currentPos = shopPos;
-        } catch (error) {
-          console.warn(`规划到${shop.name}的公交路线失败，使用估算:`, error);
-          // 使用备用估算
-          const distance = AMap.GeometryUtil.distance(currentPos, shopPos);
-          const time = Math.round(distance / 250 * 60); // 假设公交平均速度250米/分钟
-          
-          totalDistance += distance;
-          totalTime += time;
-          
-          instructions.push(`🚌 乘坐公交前往 ${shop.name}（估算：约${Math.round(distance)}米，${Math.round(time/60)}分钟）`);
-          instructions.push(`📍 到达 ${shop.name} - ${shop.address}`);
-          
-          currentPos = shopPos;
-        }
-      }
-      
-      // 规划返回家的路线
       try {
-        const transit = new AMap.Transit({
-          map: this.map,
-          city: this.selectedCity || '北京',
-          policy: AMap.TransitPolicy.LEAST_TIME,
-          nightflag: false,
-          extensions: 'all'
-        });
-
-        const returnSegment = await new Promise((resolve, reject) => {
-          transit.search(currentPos, homePosition, (status, result) => {
-            if (status === 'complete' && result.info === 'OK') {
-              const route = result.routes[0];
-              const segmentInfo = {
-                distance: route.distance,
-                time: route.time,
-                instructions: []
-              };
-
-              route.transits.forEach(transit => {
-                transit.segments.forEach(segment => {
-                  if (segment.walking) {
-                    segmentInfo.instructions.push(
-                      `🚶 步行 ${Math.round(segment.walking.distance)}米 到 ${segment.walking.destination}`
-                    );
-                  }
-                  if (segment.bus) {
-                    const busInfo = segment.bus;
-                    segmentInfo.instructions.push(
-                      `🚌 乘坐 ${busInfo.name} 从 ${busInfo.departure_stop.name} 到 ${busInfo.arrival_stop.name}`
-                    );
-                    if (busInfo.via_stops && busInfo.via_stops.length > 0) {
-                      segmentInfo.instructions.push(
-                        `  途经 ${busInfo.via_stops.length} 站`
-                      );
-                    }
-                  }
-                  if (segment.railway) {
-                    const railInfo = segment.railway;
-                    segmentInfo.instructions.push(
-                      `🚇 乘坐 ${railInfo.name} 从 ${railInfo.departure_stop.name} 到 ${railInfo.arrival_stop.name}`
-                    );
-                  }
-                });
-              });
-
-              resolve(segmentInfo);
-            } else {
-              reject(new Error(result ? result.info : '公交路线规划失败'));
-            }
-          });
-        });
-
-        instructions.push(...returnSegment.instructions);
-        totalDistance += returnSegment.distance;
-        totalTime += returnSegment.time;
-      } catch (error) {
-        console.warn('规划返回家的公交路线失败，使用估算:', error);
-        const returnDistance = AMap.GeometryUtil.distance(currentPos, homePosition);
-        const returnTime = Math.round(returnDistance / 250 * 60);
-        
-        totalDistance += returnDistance;
-        totalTime += returnTime;
-        
-        instructions.push(`🚌 乘坐公交返回家（估算：约${Math.round(returnDistance)}米，${Math.round(returnTime/60)}分钟）`);
-      }
-      
-      instructions.push('🏠 到达家，探店行程结束');
-      
-      // 发送路线信息到父组件
-      this.$emit('routeCalculated', {
-        distance: totalDistance,
-        time: totalTime,
-        shops: optimizedShops,
-        travelMode: 'TRANSIT',
-        instructions: instructions,
-        isEstimated: false
-      });
-    },
-
-    drawSimpleRoute(homePosition, shops) {
-      const path = [homePosition];
-      shops.forEach(shop => {
-        path.push(new AMap.LngLat(shop.longitude, shop.latitude));
-      });
-      path.push(homePosition);
-      
-      const polyline = new AMap.Polyline({
-        path: path,
-        strokeColor: '#FF6B6B',
-        strokeWeight: 4,
-        strokeOpacity: 0.8
-      });
-      
-      this.map.add(polyline);
-      this.map.setFitView([polyline]);
-    },
-
-    drawTransitRoute(homePosition, shops) {
-      const path = [homePosition];
-      shops.forEach(shop => {
-        path.push(new AMap.LngLat(shop.longitude, shop.latitude));
-      });
-      path.push(homePosition);
-      
-      const polyline = new AMap.Polyline({
-        path: path,
-        strokeColor: '#4ECDC4',
-        strokeWeight: 4,
-        strokeOpacity: 0.8,
-        strokeStyle: 'dashed'
-      });
-      
-      this.map.add(polyline);
-      this.map.setFitView([polyline]);
-    },
-
-    generateDrivingInstructions(shops, route) {
-      const instructions = ['🏠 从家出发'];
-      
-      shops.forEach((shop, index) => {
-        instructions.push(`🚗 驾车前往 ${shop.name}`);
-        instructions.push(`📍 到达 ${shop.name} - ${shop.address}`);
-      });
-      
-      instructions.push('🚗 驾车返回家');
-      instructions.push('🏠 到达家，探店行程结束');
-      
-      return instructions;
-    },
-    
-    setCenterToCity(longitude, latitude, cityName) {
-      if (!this.map) return;
-      
-      const newCenter = new AMap.LngLat(longitude, latitude);
-      this.map.setCenter(newCenter);
-      this.map.setZoom(11);
-    },
-
-    // 新增：绘制后端优化后的路线
-    drawOptimizedRoute(routeData) {
-      if (!this.map || !routeData) {
-        console.error('地图未初始化或没有路线数据');
-        return;
-      }
-      this.clearAllMarkers(); // 清除地图上所有旧元素
-      const allMapElements = [];
-      // 绘制路线的每一段
-      routeData.route_segments.forEach(segment => {
-        if (segment.polyline) {
-          const path = segment.polyline.split(';').map(coordStr => {
-            const parts = coordStr.split(',');
-            return new AMap.LngLat(parseFloat(parts[0]), parseFloat(parts[1]));
-          });
-          if (path.length > 0) {
-            const polyline = new AMap.Polyline({
-              path: path,
-              strokeColor: '#3366FF',
-              strokeOpacity: 0.8,
-              strokeWeight: 6,
-            });
-            this.map.add(polyline);
-            allMapElements.push(polyline);
-          }
+        // 清除现有的家标记
+        if (this.homeMarker) {
+          this.map.remove(this.homeMarker);
         }
-      });
-      // 在地图上标记每一个点（家和店铺）
-      routeData.optimized_order.forEach((point, index) => {
-        const isHome = point.id === 'home';
-        const marker = new AMap.Marker({
-          position: new AMap.LngLat(point.longitude, point.latitude),
-          title: point.name,
-          label: {
-            content: (index + 1).toString(),
-            direction: 'center'
-          },
+        
+        // 创建家的标记
+        const position = new AMap.LngLat(lng, lat);
+        this.homeMarker = new AMap.Marker({
+          position: position,
+          title: `家: ${address}`,
           icon: new AMap.Icon({
             size: new AMap.Size(25, 34),
-            image: isHome ? 'https://webapi.amap.com/theme/v1.3/markers/n/mark_r.png' : 'https://webapi.amap.com/theme/v1.3/markers/n/mark_b.png'
-          })
+            image: 'https://webapi.amap.com/theme/v1.3/markers/n/mark_r.png'
+          }),
+          offset: new AMap.Pixel(-13, -30),
+          anchor: 'bottom-center'
         });
-        this.map.add(marker);
-        allMapElements.push(marker);
+        
+        this.map.add(this.homeMarker);
+        
+        // 设置地图中心和缩放级别
+        this.map.setCenter(position);
+        this.map.setZoom(14);
+        
+        console.log("家的位置设置成功:", address);
+        return true;
+        
+      } catch (error) {
+        console.error("设置家位置失败:", error);
+        this.$emit('notify', '设置家的位置失败', 'error');
+        return false;
+      }
+    },
+    
+    // 等待地图初始化完成
+    waitForInitialization() {
+      return new Promise((resolve) => {
+        if (this.isInitialized) {
+          resolve();
+          return;
+        }
+        
+        const checkInitialized = () => {
+          if (this.isInitialized) {
+            resolve();
+          } else {
+            setTimeout(checkInitialized, 100);
+          }
+        };
+        checkInitialized();
       });
-      // 让地图自动缩放到合适的视野
-      if (allMapElements.length > 0) {
-        this.map.setFitView(allMapElements, false, [60, 60, 60, 60], 18);
+    },
+    
+    // 改进的添加店铺标记方法
+    async addShopMarker(shop) {
+      if (!this.isInitialized) {
+        await this.waitForInitialization();
+      }
+      
+      if (!this.map || !shop.longitude || !shop.latitude) {
+        console.error("无法添加店铺标记：地图未初始化或店铺坐标缺失");
+        return false;
+      }
+      
+      try {
+        const position = new AMap.LngLat(
+          parseFloat(shop.longitude), 
+          parseFloat(shop.latitude)
+        );
+        
+        const marker = new AMap.Marker({
+          position: position,
+          title: `店铺: ${shop.name}`,
+          icon: new AMap.Icon({
+            size: new AMap.Size(25, 34),
+            image: 'https://webapi.amap.com/theme/v1.3/markers/n/mark_b.png'
+          }),
+          offset: new AMap.Pixel(-13, -30),
+          anchor: 'bottom-center'
+        });
+        
+        // 存储店铺信息
+        marker.shopInfo = shop;
+        
+        this.map.add(marker);
+        this.shopMarkers.push(marker);
+        
+        // 更新地图视野
+        this.updateMapView();
+        
+        return true;
+        
+      } catch (error) {
+        console.error("添加店铺标记失败:", error);
+        this.$emit('notify', `添加 ${shop.name} 标记失败`, 'error');
+        return false;
+      }
+    },
+    
+    // 改进的地图视野更新
+    updateMapView() {
+      if (!this.isInitialized || !this.map) {
+        return;
+      }
+      
+      try {
+        const allMarkers = [...this.shopMarkers];
+        if (this.homeMarker) {
+          allMarkers.push(this.homeMarker);
+        }
+        
+        if (allMarkers.length > 1) {
+          this.map.setFitView(allMarkers, false, [50, 50, 50, 50], 18);
+        } else if (allMarkers.length === 1) {
+          this.map.setCenter(allMarkers[0].getPosition());
+          this.map.setZoom(15);
+        }
+      } catch (error) {
+        console.error("更新地图视野失败:", error);
+      }
+    },
+    
+    // 改进的路线绘制方法
+    async drawOptimizedRoute(routeData) {
+      if (!this.isInitialized) {
+        await this.waitForInitialization();
+      }
+      
+      if (!this.map || !routeData) {
+        console.error('地图未初始化或没有路线数据');
+        return false;
+      }
+      
+      try {
+        // 先清除旧路线，但保留标记
+        this.clearRouteOnly();
+        
+        const allMapElements = [];
+        
+        // 绘制路线段
+        if (routeData.route_segments && routeData.route_segments.length > 0) {
+          routeData.route_segments.forEach((segment, index) => {
+            if (segment.polyline) {
+              try {
+                const path = this.parsePolyline(segment.polyline);
+                if (path.length > 0) {
+                  const polyline = new AMap.Polyline({
+                    path: path,
+                    strokeColor: this.getRouteColor(index),
+                    strokeOpacity: 0.8,
+                    strokeWeight: 6,
+                    strokeStyle: 'solid'
+                  });
+                  
+                  this.map.add(polyline);
+                  allMapElements.push(polyline);
+                }
+              } catch (error) {
+                console.warn(`绘制路线段 ${index} 失败:`, error);
+              }
+            }
+          });
+        }
+        
+        // 标记路线点
+        if (routeData.optimized_order && routeData.optimized_order.length > 0) {
+          routeData.optimized_order.forEach((point, index) => {
+            try {
+              const isHome = point.id === 'home';
+              const marker = new AMap.Marker({
+                position: new AMap.LngLat(point.longitude, point.latitude),
+                title: point.name,
+                label: {
+                  content: (index + 1).toString(),
+                  direction: 'center',
+                  style: {
+                    fontSize: '12px',
+                    fontWeight: 'bold',
+                    color: 'white',
+                    background: isHome ? '#ff4444' : '#4444ff',
+                    border: 'none',
+                    borderRadius: '50%',
+                    padding: '2px 6px'
+                  }
+                },
+                icon: new AMap.Icon({
+                  size: new AMap.Size(25, 34),
+                  image: isHome ? 
+                    'https://webapi.amap.com/theme/v1.3/markers/n/mark_r.png' : 
+                    'https://webapi.amap.com/theme/v1.3/markers/n/mark_b.png'
+                }),
+                offset: new AMap.Pixel(-13, -30)
+              });
+              
+              this.map.add(marker);
+              allMapElements.push(marker);
+            } catch (error) {
+              console.warn(`标记点 ${index} 失败:`, error);
+            }
+          });
+        }
+        
+        // 自动调整视野
+        if (allMapElements.length > 0) {
+          setTimeout(() => {
+            try {
+              this.map.setFitView(allMapElements, false, [60, 60, 60, 60], 18);
+            } catch (error) {
+              console.warn("调整地图视野失败:", error);
+            }
+          }, 100);
+        }
+        
+        console.log("路线绘制完成");
+        return true;
+        
+      } catch (error) {
+        console.error("绘制路线失败:", error);
+        this.$emit('notify', '路线绘制失败', 'error');
+        return false;
+      }
+    },
+    
+    // 只清除路线，保留标记
+    clearRouteOnly() {
+      if (this.driving) {
+        try {
+          this.driving.clear();
+          this.driving = null;
+        } catch (error) {
+          console.warn("清除驾车路线失败:", error);
+        }
+      }
+      
+      // 清除地图上的折线
+      this.map.getAllOverlays('polyline').forEach(polyline => {
+        try {
+          this.map.remove(polyline);
+        } catch (error) {
+          console.warn("移除折线失败:", error);
+        }
+      });
+    },
+    
+    // 解析折线坐标
+    parsePolyline(polylineStr) {
+      if (!polylineStr) return [];
+      
+      try {
+        return polylineStr.split(';').map(coordStr => {
+          const parts = coordStr.split(',');
+          return new AMap.LngLat(parseFloat(parts[0]), parseFloat(parts[1]));
+        }).filter(coord => 
+          !isNaN(coord.lng) && !isNaN(coord.lat)
+        );
+      } catch (error) {
+        console.error("解析折线坐标失败:", error);
+        return [];
+      }
+    },
+    
+    // 获取路线颜色
+    getRouteColor(index) {
+      const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7'];
+      return colors[index % colors.length];
+    },
+    
+    // 设置城市中心
+    setCenterToCity(longitude, latitude, cityName) {
+      if (!this.isInitialized || !this.map) {
+        console.warn("地图未初始化，无法设置城市中心");
+        return;
+      }
+      
+      try {
+        const newCenter = new AMap.LngLat(longitude, latitude);
+        this.map.setCenter(newCenter);
+        this.map.setZoom(11);
+        console.log(`已切换到城市: ${cityName}`);
+      } catch (error) {
+        console.error("设置城市中心失败:", error);
       }
     }
   },
+  
+  // 组件销毁时清理资源
   beforeUnmount() {
-    if (this.driving) {
-      this.driving.clear();
-      this.driving = null;
-    }
-    this.clearAllMarkers();
-    if (this.map) {
-      this.map.destroy();
-      this.map = null;
+    try {
+      if (this.driving) {
+        this.driving.clear();
+        this.driving = null;
+      }
+      
+      this.clearAllMarkersAndRoutes();
+      
+      if (this.map) {
+        this.map.destroy();
+        this.map = null;
+      }
+      
+      this.isInitialized = false;
+      console.log("地图组件资源清理完成");
+    } catch (error) {
+      console.error("清理地图资源时出错:", error);
     }
   }
 };
+
+// 数据验证工具类
+class DataValidator {
+  static validateCoordinates(latitude, longitude) {
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (isNaN(lat) || isNaN(lng)) {
+      return { valid: false, error: '经纬度必须是有效数字' };
+    }
+    if (lat < -90 || lat > 90) {
+      return { valid: false, error: '纬度必须在-90到90之间' };
+    }
+    if (lng < -180 || lng > 180) {
+      return { valid: false, error: '经度必须在-180到180之间' };
+    }
+    return { valid: true, latitude: lat, longitude: lng };
+  }
+  static validateShop(shop) {
+    const errors = [];
+    if (!shop.id) {
+      errors.push('店铺ID不能为空');
+    }
+    if (!shop.name || shop.name.trim().length === 0) {
+      errors.push('店铺名称不能为空');
+    }
+    if (shop.type !== 'chain') {
+      const coordValidation = this.validateCoordinates(shop.latitude, shop.longitude);
+      if (!coordValidation.valid) {
+        errors.push(`坐标验证失败: ${coordValidation.error}`);
+      }
+    }
+    if (shop.stay_duration !== undefined) {
+      const duration = parseFloat(shop.stay_duration);
+      if (isNaN(duration) || duration < 0) {
+        errors.push('停留时间必须是非负数');
+      }
+    }
+    return {
+      valid: errors.length === 0,
+      errors: errors
+    };
+  }
+  static validateHomeLocation(homeLocation) {
+    if (!homeLocation) {
+      return { valid: false, error: '家的位置不能为空' };
+    }
+    if (!homeLocation.latitude || !homeLocation.longitude) {
+      return { valid: false, error: '家的经纬度信息缺失' };
+    }
+    return this.validateCoordinates(homeLocation.latitude, homeLocation.longitude);
+  }
+}
+
+// 状态管理类
+class RouteState {
+  constructor() {
+    this.reset();
+  }
+  reset() {
+    this.isPlanning = false;
+    this.isLoading = false;
+    this.routeCombinations = [];
+    this.currentRouteIndex = 0;
+    this.routeInfo = null;
+    this.showRouteInfo = false;
+    this.routeSummary = null;
+    this.selectedRouteId = null;
+    this.errors = [];
+  }
+  setPlanning(status) {
+    this.isPlanning = status;
+    if (status) {
+      this.isLoading = true;
+      this.errors = [];
+    }
+  }
+  setLoading(status) {
+    this.isLoading = status;
+  }
+  addError(error) {
+    this.errors.push({
+      message: error,
+      timestamp: new Date(),
+      id: Date.now()
+    });
+  }
+  setRouteCombinations(combinations) {
+    this.routeCombinations = combinations || [];
+    this.currentRouteIndex = 0;
+  }
+  selectRoute(index) {
+    if (index >= 0 && index < this.routeCombinations.length) {
+      this.currentRouteIndex = index;
+      this.selectedRouteId = this.routeCombinations[index]?.id;
+      return this.routeCombinations[index];
+    }
+    return null;
+  }
+  getCurrentRoute() {
+    return this.routeCombinations[this.currentRouteIndex] || null;
+  }
+  hasRoutes() {
+    return this.routeCombinations.length > 0;
+  }
+}
 
 const Dashboard = {
   components: {
@@ -1122,59 +1018,78 @@ const Dashboard = {
         </button>
         
         <!-- 路线信息显示 -->
-        <div v-if="Array.isArray(routeCombinations) && routeCombinations.length > 0" class="route-options">
+        <div v-if="routeCombinations && routeCombinations.length > 0" class="route-options">
           <h3>
             <i class="icon">🛣️</i> 
-            可选路线 ({{ Array.isArray(routeCombinations) ? routeCombinations.length : 0 }}条)
+            可选路线方案
             <span class="route-info-badge">智能分析所有分店和访问顺序</span>
           </h3>
           
-          <div class="route-list">
-            <div 
-              v-for="(route, index) in (routeCombinations && routeCombinations.length ? routeCombinations : [])" 
-              :key="'route_' + (route && route.originalIndex ? route.originalIndex : index) + '_' + (route && route.type ? route.type : '')"
-              :class="['route-item', { 'active': index === currentRouteIndex }]"
-              @click="switchToRoute(index)"
-            >
-               <div class="route-number">{{ index + 1 }}</div>
-               <div class="route-details">
-                 <div class="route-header">
-                   <span class="route-type-badge" :class="route.type">
-                    {{ route?.optimizationType || route?.type || '' }}
-                   </span>
-                   <span class="route-rank">第{{ route?.rank || (index+1) }}名</span>
-                 </div>
-                 <div class="route-shops">
-                   {{ route && route.combination ? route.combination.map(function(s){return s.name;}).join(' → ') : '加载中...' }}
-                 </div>
-                 <div class="route-summary">
-                   <span>{{ formatDuration(((route && route.totalTime ? route.totalTime : 0) / 60)) }}</span>
-                   <span class="separator">|</span>
-                   <span>{{ formatDistance(route && route.totalDistance ? route.totalDistance : 0) }}</span>
-                 </div>
-                 <div class="route-brands" v-if="route && route.combination">
-                   <span 
-                     v-for="shop in route.combination" 
-                     :key="shop.id"
-                     class="brand-tag"
-                     :class="{ 'chain-brand': shop.brandName, 'private-brand': !shop.brandName }"
-                   >
-                     {{ shop.brandName || '私人店铺' }}
-                   </span>
-                 </div>
-               </div>
-             </div>
-           </div>
+          <div class="route-categories">
+            <!-- 按时间优化的路线 -->
+            <div class="route-category">
+              <h4><i class="icon">⏱️</i> 按时间优化的路线</h4>
+              <div class="route-list">
+                <div 
+                  v-for="(route, index) in routeCombinations.filter(r => r.type === 'time')" 
+                  :key="route.id"
+                  :class="['route-item', { 'active': route.id === selectedRouteId }]"
+                >
+                   <div class="route-number">{{ index + 1 }}</div>
+                   <div class="route-details">
+                     <div class="route-header">
+                       <span class="route-type-badge time">时间优先</span>
+                       <span class="route-rank">第{{ route.rank }}名</span>
+                     </div>
+                     <div class="route-shops">
+                       {{ route && route.combination ? route.combination.map(function(s){return s.name;}).join(' → ') : '加载中...' }}
+                     </div>
+                     <div class="route-summary">
+                       <span class="time-value">{{ formatDuration((route.totalTime / 60)) }}</span>
+                       <span class="separator">|</span>
+                       <span class="distance-value">{{ formatDistance(route.totalDistance) }}</span>
+                     </div>
+                   </div>
+                   <button @click="switchToRoute(routeCombinations.indexOf(route))" class="select-route-btn">选择</button>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 按距离优化的路线 -->
+            <div class="route-category">
+              <h4><i class="icon">📍</i> 按距离优化的路线</h4>
+              <div class="route-list">
+                <div 
+                  v-for="(route, index) in routeCombinations.filter(r => r.type === 'distance')" 
+                  :key="route.id"
+                  :class="['route-item', { 'active': route.id === selectedRouteId }]"
+                >
+                   <div class="route-number">{{ index + 1 }}</div>
+                   <div class="route-details">
+                     <div class="route-header">
+                       <span class="route-type-badge distance">距离优先</span>
+                       <span class="route-rank">第{{ route.rank }}名</span>
+                     </div>
+                     <div class="route-shops">
+                       {{ route && route.combination ? route.combination.map(function(s){return s.name;}).join(' → ') : '加载中...' }}
+                     </div>
+                     <div class="route-summary">
+                       <span class="time-value">{{ formatDuration((route.totalTime / 60)) }}</span>
+                       <span class="separator">|</span>
+                       <span class="distance-value">{{ formatDistance(route.totalDistance) }}</span>
+                     </div>
+                   </div>
+                   <button @click="switchToRoute(routeCombinations.indexOf(route))" class="select-route-btn">选择</button>
+                </div>
+              </div>
+            </div>
+          </div>
            
            <!-- 路线统计信息 -->
            <div class="route-statistics">
              <div class="stat-item">
-               <span class="stat-label">按时间优化</span>
-               <span class="stat-value">{{ routeCombinations && routeCombinations.length ? routeCombinations.filter(function(r){return r.type === 'fastest'}).length : 0 }}条</span>
-             </div>
-             <div class="stat-item">
-               <span class="stat-label">按距离优化</span>
-               <span class="stat-value">{{ routeCombinations && routeCombinations.length ? routeCombinations.filter(function(r){return r.type === 'shortest'}).length : 0 }}条</span>
+              <span class="stat-label">点击路线可查看详细指导</span>
+              <span class="stat-value">{{ selectedRouteId ? '已选择' : '未选择' }}</span>
              </div>
            </div>
          </div>
@@ -2223,7 +2138,7 @@ const Dashboard = {
       if (travelMode === 'DRIVING') {
         // 驾车：城市内平均速度约25-35公里/小时，考虑红绿灯和拥堵
         // 30公里/小时 = 500米/分钟
-        speedMeterPerMinute = 500;
+        speedMeterPerMinute = 1000;
       } else if (travelMode === 'TRANSIT') {
         // 公交：包含等车、换乘时间，平均约15-20公里/小时
         // 18公里/小时 = 300米/分钟
@@ -2607,397 +2522,312 @@ const Dashboard = {
     },
 // 修改getDirections方法以适配当前后端响应格式
 
-async getDirections() {
-  if (this.isPlanning) return;
-  this.isPlanning = true;
-  this.isLoading = true;
-  
-  console.log('=== 开始多候选路线规划 ===');
-  this.showNotification('开始路线规划...', 'info');
+    // 修复的异步处理逻辑
+    async getDirections() {
+        if (this.isPlanning) return;
+        this.isPlanning = true;
+        this.isLoading = true;
+        
+        try {
+            // 前置验证
+            if (!this.homeLocation || !this.homeLocation.latitude || !this.homeLocation.longitude) {
+                this.showNotification('请先设置家的位置', 'error');
+                return;
+            }
+            if (!this.shopsToVisit || this.shopsToVisit.length === 0) {
+                this.showNotification('请先添加要探访的店铺', 'error');
+                return;
+            }
+            const privateStores = this.shopsToVisit.filter(s => {
+                return s.type !== 'chain' && s.latitude && s.longitude && 
+                       !isNaN(parseFloat(s.latitude)) && !isNaN(parseFloat(s.longitude));
+            });
+            const chainStores = this.shopsToVisit.filter(s => s.type === 'chain');
+            let allShops = [...privateStores];
 
-  // 初始化UI状态
-  this.routesByDistance = [];
-  this.routesByTime = [];
-  this.currentRouteIndex = 0;
-  this.routeInfo = null;
-  this.showRouteInfo = false;
-  
-  if (this.$refs.mapDisplayRef) {
-      this.$refs.mapDisplayRef.clearRoute();
-  }
+            // 并发处理连锁店分店搜索
+            if (chainStores.length > 0) {
+                this.showNotification(`正在搜索${chainStores.length}个连锁品牌的分店...`, 'info');
+                const searchTasks = chainStores.map(chainStore => 
+                    this.searchChainStoreNearby(chainStore)
+                );
+                const searchResults = await Promise.allSettled(searchTasks);
+                searchResults.forEach((result, index) => {
+                    if (result.status === 'fulfilled' && result.value) {
+                        allShops.push(result.value);
+                    } else {
+                        console.error(`搜索 ${chainStores[index].name} 失败:`, result.reason);
+                        this.showNotification(`${chainStores[index].name} 分店搜索失败`, 'warning');
+                    }
+                });
+            }
+            // 继续后续逻辑
+            await this.processRouteOptimization(allShops);
+        } catch (error) {
+            console.error('路线规划失败:', error);
+            this.handleRouteError(error);
+        } finally {
+            this.isLoading = false;
+            this.isPlanning = false;
+        }
+    },
 
-  try {
-      // 验证数据（保持原来的验证逻辑）
-      if (!this.homeLocation || !this.homeLocation.latitude || !this.homeLocation.longitude) {
-          this.showNotification('请先设置家的位置', 'error');
+    // 辅助方法：搜索单个连锁店附近分店
+    async searchChainStoreNearby(chainStore) {
+        try {
+            const response = await axios.post('/api/shops/find', {
+                keywords: chainStore.name,
+                city: this.selectedCity,
+                latitude: this.homeLocation.latitude,
+                longitude: this.homeLocation.longitude,
+                radius: 20000,
+                get_details: true
+            });
+            const branches = response.data.shops || [];
+            if (branches.length > 0) {
+                const validBranches = branches.filter(b => {
+                    return b.latitude && b.longitude && 
+                           !isNaN(parseFloat(b.latitude)) && !isNaN(parseFloat(b.longitude));
+                });
+                if (validBranches.length > 0) {
+                    const nearbyBranches = validBranches
+                        .map(branch => ({
+                            ...branch,
+                            distanceToHome: this.calculateDistanceSafe(
+                                this.homeLocation.longitude, 
+                                this.homeLocation.latitude, 
+                                branch.longitude, 
+                                branch.latitude
+                            )
+                        }))
+                        .filter(b => b.distanceToHome != null && b.distanceToHome < 50000)
+                        .sort((a, b) => a.distanceToHome - b.distanceToHome)
+                        .slice(0, 1);
+                    if (nearbyBranches.length > 0) {
+                        const selectedBranch = nearbyBranches[0];
+                        return {
+                            id: selectedBranch.id || `chain_${chainStore.name}_${Date.now()}`,
+                            name: selectedBranch.name,
+                            latitude: parseFloat(selectedBranch.latitude),
+                            longitude: parseFloat(selectedBranch.longitude),
+                            address: selectedBranch.address || '地址未知',
+                            stay_duration: this.getStayDuration(chainStore.id) * 60,
+                            type: 'chain',
+                            brand: chainStore.name
+                        };
+                    }
+                }
+            }
+            return null;
+        } catch (error) {
+            console.error(`搜索 ${chainStore.name} 分店失败:`, error);
+            throw error;
+        }
+    },
+
+    // 处理路线优化的独立方法
+    async processRouteOptimization(allShops) {
+        if (allShops.length === 0) {
+            this.showNotification('没有找到可用的店铺进行路线规划', 'error');
+            return;
+        }
+        this.showNotification(`正在计算${allShops.length}个店铺的最优路线组合...`, 'info');
+        const payload = {
+            home_location: {
+                latitude: parseFloat(this.homeLocation.latitude),
+                longitude: parseFloat(this.homeLocation.longitude)
+            },
+            shops: allShops.map(shop => ({
+                id: shop.id,
+                name: shop.name,
+                latitude: parseFloat(shop.latitude),
+                longitude: parseFloat(shop.longitude),
+                address: shop.address,
+                stay_duration: shop.stay_duration || (this.getStayDuration(shop.id) * 60)
+            })),
+            mode: this.travelMode.toLowerCase(),
+            city: this.selectedCity || '北京',
+            top_n: 10
+        };
+        const response = await axios.post('/api/route/optimize', payload);
+        const routesData = response.data;
+        if (!routesData || !routesData.route_candidates) {
+            this.showNotification('服务器返回数据格式错误', 'error');
+            return;
+        }
+        this.processRouteResults(routesData);
+    },
+
+    // 处理路线结果
+    processRouteResults(routesData) {
+        if (!routesData || !routesData.route_candidates || routesData.route_candidates.length === 0) {
+            this.showNotification('未能计算出有效路线', 'warning');
+            return;
+        }
+
+        const allRoutes = routesData.route_candidates;
+        console.log('🔍 收到的路线数据:', allRoutes);
+
+        // 按时间从短到长排序，取前5个
+        const timeRoutes = [...allRoutes]
+            .sort((a, b) => a.total_overall_duration - b.total_overall_duration)
+            .slice(0, 5);
+
+        // 按距离从短到长排序，取前5个  
+        const distanceRoutes = [...allRoutes]
+            .sort((a, b) => a.total_distance - b.total_distance)
+            .slice(0, 5);
+
+        console.log('⏱️ 按时间排序的路线:', timeRoutes);
+        console.log('📍 按距离排序的路线:', distanceRoutes);
+        
+        // 转换路线数据格式
+        const formatRoute = (route, index, type) => ({
+            id: `route_${type}_${index}`,
+            type: type,
+            optimizationType: type === 'time' ? '时间最短' : '距离最短',
+            rank: index + 1,
+            combination: route.optimized_order || [],
+            totalTime: Math.round(route.total_overall_duration),
+            totalDistance: Math.round(route.total_distance),
+            routeData: route,
+            originalIndex: index
+        });
+        
+        // 生成最终的路线组合数组
+        this.routeCombinations = [
+            ...timeRoutes.map((route, index) => formatRoute(route, index, 'time')),
+            ...distanceRoutes.map((route, index) => formatRoute(route, index, 'distance'))
+        ];
+        
+        console.log('🚗 最终生成的路线组合:', this.routeCombinations);
+        
+        if (this.routeCombinations.length === 0) {
+            this.showNotification('未能计算出有效路线', 'warning');
+            return;
+        }
+        
+        // 清除当前路线详情，等待用户点击
+        this.routeInfo = null;
+        this.showRouteInfo = false;
+        
+        this.showNotification(`🎉 成功获取候选路线! 时间优化(${timeRoutes.length}条), 距离优化(${distanceRoutes.length}条)`, 'success');
+    },
+
+    // 错误处理方法
+    handleRouteError(error) {
+        let errorMessage = '路线规划失败';
+        if (error.response) {
+            errorMessage = error.response.data?.message || `服务器错误 (${error.response.status})`;
+        } else if (error.request) {
+            errorMessage = '网络连接失败，请检查网络设置';
+        } else {
+            errorMessage = '请求配置错误，请刷新页面重试';
+        }
+        this.showNotification(errorMessage, 'error');
+    },
+
+    // 选择特定路线的方法
+    selectRoute(routeOption) {
+      if (!routeOption || !routeOption.routeData) {
+          console.warn('没有路线数据可显示');
           return;
       }
-
-      if (!this.shopsToVisit || this.shopsToVisit.length === 0) {
-          this.showNotification('请先添加要探访的店铺', 'error');
-          return;
-      }
-
-      // 处理店铺数据（保持原来的处理逻辑）
-      const privateStores = this.shopsToVisit.filter(s => {
-          return s.type !== 'chain' && s.latitude && s.longitude && 
-                 !isNaN(parseFloat(s.latitude)) && !isNaN(parseFloat(s.longitude));
-      });
       
-      const chainStores = this.shopsToVisit.filter(s => s.type === 'chain');
-
-      let allShops = [...privateStores];
-
-      // 处理连锁店（保持原来的逻辑）
-      if (chainStores.length > 0) {
-          this.showNotification(`正在搜索${chainStores.length}个连锁品牌的分店...`, 'info');
-          
-          for (const chainStore of chainStores) {
-              try {
-                  const response = await axios.post('/api/shops/find', {
-                      keywords: chainStore.name,
-                      city: this.selectedCity,
-                      latitude: this.homeLocation.latitude,
-                      longitude: this.homeLocation.longitude,
-                      radius: 20000,
-                      get_details: true
-                  });
-
-                  const branches = response.data.shops || [];
-                  if (branches.length > 0) {
-                      const validBranches = branches.filter(b => {
-                          return b.latitude && b.longitude && 
-                                 !isNaN(parseFloat(b.latitude)) && !isNaN(parseFloat(b.longitude));
-                      });
-
-                      if (validBranches.length > 0) {
-                          const nearbyBranches = validBranches
-                              .map(branch => ({
-                                  ...branch,
-                                  distanceToHome: this.calculateDistanceSafe(
-                                      this.homeLocation.longitude, 
-                                      this.homeLocation.latitude, 
-                                      branch.longitude, 
-                                      branch.latitude
-                                  )
-                              }))
-                              .filter(b => b.distanceToHome != null && b.distanceToHome < 50000)
-                              .sort((a, b) => a.distanceToHome - b.distanceToHome)
-                              .slice(0, 1);
-
-                          if (nearbyBranches.length > 0) {
-                              const selectedBranch = nearbyBranches[0];
-                              allShops.push({
-                                  id: selectedBranch.id || `chain_${chainStore.name}_${Date.now()}`,
-                                  name: selectedBranch.name,
-                                  latitude: parseFloat(selectedBranch.latitude),
-                                  longitude: parseFloat(selectedBranch.longitude),
-                                  address: selectedBranch.address || '地址未知',
-                                  stay_duration: this.getStayDuration(chainStore.id) * 60,
-                                  type: 'chain',
-                                  brand: chainStore.name
-                              });
-                          }
-                      }
-                  }
-              } catch (error) {
-                  console.error(`搜索 ${chainStore.name} 分店失败:`, error);
-              }
-          }
-      }
-
-      if (allShops.length === 0) {
-          this.showNotification('没有找到可用的店铺进行路线规划', 'error');
-          return;
-      }
-
-      // 准备API请求
-      this.showNotification(`正在计算${allShops.length}个店铺的最优路线组合...`, 'info');
+      console.log('选择路线:', routeOption);
       
-      const payload = {
-          home_location: {
-              latitude: parseFloat(this.homeLocation.latitude),
-              longitude: parseFloat(this.homeLocation.longitude)
-          },
-          shops: allShops.map(shop => ({
-              id: shop.id,
-              name: shop.name,
-              latitude: parseFloat(shop.latitude),
-              longitude: parseFloat(shop.longitude),
-              address: shop.address,
-              stay_duration: shop.stay_duration || (this.getStayDuration(shop.id) * 60)
-          })),
-          mode: this.travelMode.toLowerCase(),
-          city: this.selectedCity || '北京'
+      const mapDisplay = this.$refs.mapDisplayRef;
+      if (mapDisplay) {
+          // 在地图上绘制路线
+          mapDisplay.drawOptimizedRoute(routeOption.routeData);
+      }
+      
+      // 更新路线信息显示
+      this.routeInfo = routeOption.routeData;
+      this.showRouteInfo = true;
+      this.currentSelectedRoute = routeOption;
+      
+      this.routeSummary = {
+          totalTime: this.formatDuration(routeOption.totalTime / 60),
+          totalDistance: this.formatDistance(routeOption.totalDistance),
+          optimizationType: `${routeOption.optimizationType} (第${routeOption.rank}选择)`,
+          combination: routeOption.combination.map(s => s.name).join(' → ')
       };
-
-      console.log('发送多候选路线请求:', payload);
-
-      // 调用后端接口
-      const response = await axios.post('/api/route/optimize', payload);
-      console.log('多候选路线响应:', response.data);
-
-      const routesData = response.data.routes;
-      if (!routesData) {
-          this.showNotification('服务器返回数据格式错误', 'error');
-          return;
-      }
-
-      // 适配当前后端响应格式
-      // 为了演示多候选路线效果，我们创建一些变化版本
-      this.routesByDistance = [];
-      this.routesByTime = [];
-
-      // 处理距离最短路线
-      const baseDistanceRoute = routesData.shortest_distance_routes && routesData.shortest_distance_routes.length > 0 ? routesData.shortest_distance_routes[0] : null;
-      if (baseDistanceRoute) {
-          // 创建5个距离优化的候选路线（当前只有一个真实路线，其他为演示）
-          for (let i = 0; i < 5; i++) {
-              // 为演示目的，添加一些随机变化
-              const variation = i * 0.05; // 5%的变化
-              const routeData = { ...baseDistanceRoute };
-              
-              this.routesByDistance.push({
-                  type: 'distance',
-                  optimizationType: '距离最短',
-                  rank: i + 1,
-                  combination: routeData.optimized_order || [],
-                  totalTime: Math.round(routeData.total_travel_time * (1 + variation)),
-                  totalDistance: Math.round(routeData.total_distance * (1 + variation)),
-                  routeData: routeData,
-                  originalIndex: i,
-                  id: `distance_${i}`,
-                  isReal: i === 0 // 标记第一个是真实数据
-              });
+      
+      // 更新UI中的选中状态
+      this.selectedRouteId = routeOption.id;
+      
+      const realText = routeOption.isReal ? '(真实计算)' : '(模拟数据)';
+      this.showNotification(`已选择: ${routeOption.optimizationType} 第${routeOption.rank}候选路线 ${realText}`, 'info');
+    },
+    // 辅助方法：安全计算距离
+    calculateDistanceSafe(lng1, lat1, lng2, lat2) {
+      try {
+          const lon1 = parseFloat(lng1);
+          const lat1Val = parseFloat(lat1);
+          const lon2 = parseFloat(lng2);
+          const lat2Val = parseFloat(lat2);
+          
+          if (isNaN(lon1) || isNaN(lat1Val) || isNaN(lon2) || isNaN(lat2Val)) {
+              console.warn('距离计算参数无效:', { lng1, lat1, lng2, lat2 });
+              return null;
           }
-      }
-
-      // 处理时间最短路线
-      const baseTimeRoute = routesData.fastest_travel_time_routes && routesData.fastest_travel_time_routes.length > 0 ? routesData.fastest_travel_time_routes[0] : null;
-      if (baseTimeRoute) {
-          // 创建5个时间优化的候选路线
-          for (let i = 0; i < 5; i++) {
-              const variation = i * 0.08; // 8%的变化
-              const routeData = { ...baseTimeRoute };
-              
-              this.routesByTime.push({
-                  type: 'time',
-                  optimizationType: '时间最短',
-                  rank: i + 1,
-                  combination: routeData.optimized_order || [],
-                  totalTime: Math.round(routeData.total_travel_time * (1 + variation)),
-                  totalDistance: Math.round(routeData.total_distance * (1 + variation * 1.2)),
-                  routeData: routeData,
-                  originalIndex: i,
-                  id: `time_${i}`,
-                  isReal: i === 0 // 标记第一个是真实数据
-              });
+          
+          if (window.AMap && AMap.GeometryUtil) {
+              return AMap.GeometryUtil.distance(
+                  new AMap.LngLat(lon1, lat1Val),
+                  new AMap.LngLat(lon2, lat2Val)
+              );
           }
-      }
-
-      const totalRoutes = this.routesByDistance.length + this.routesByTime.length;
-      
-      if (totalRoutes === 0) {
-          this.showNotification('未能计算出有效路线', 'warning');
-          return;
-      }
-
-      this.showNotification(`🎉 成功获取 ${totalRoutes} 条候选路线! (距离优化: ${this.routesByDistance.length}条, 时间优化: ${this.routesByTime.length}条)`, 'success');
-      
-      // 默认选择距离最短的第一条路线
-      if (this.routesByDistance.length > 0) {
-          this.selectRoute(this.routesByDistance[0]);
-      } else if (this.routesByTime.length > 0) {
-          this.selectRoute(this.routesByTime[0]);
-      }
-
-  } catch (error) {
-      console.error('多候选路线规划失败:', error);
-      
-      let errorMessage = '路线规划失败';
-      if (error.response) {
-          errorMessage = error.response.data?.message || `服务器错误 (${error.response.status})`;
-      } else if (error.request) {
-          errorMessage = '网络连接失败，请检查网络设置';
-      } else {
-          errorMessage = '请求配置错误，请刷新页面重试';
-      }
-      
-      this.showNotification(errorMessage, 'error');
-  } finally {
-      this.isLoading = false;
-      this.isPlanning = false;
-  }
-},
-
-// 选择特定路线的方法
-selectRoute(routeOption) {
-  if (!routeOption || !routeOption.routeData) {
-      console.warn('没有路线数据可显示');
-      return;
-  }
-  
-  console.log('选择路线:', routeOption);
-  
-  const mapDisplay = this.$refs.mapDisplayRef;
-  if (mapDisplay) {
-      // 在地图上绘制路线
-      mapDisplay.drawOptimizedRoute(routeOption.routeData);
-  }
-  
-  // 更新路线信息显示
-  this.routeInfo = routeOption.routeData;
-  this.showRouteInfo = true;
-  this.currentSelectedRoute = routeOption;
-  
-  this.routeSummary = {
-      totalTime: this.formatDuration(routeOption.totalTime / 60),
-      totalDistance: this.formatDistance(routeOption.totalDistance),
-      optimizationType: `${routeOption.optimizationType} (第${routeOption.rank}选择)`,
-      combination: routeOption.combination.map(s => s.name).join(' → ')
-  };
-  
-  // 更新UI中的选中状态
-  this.selectedRouteId = routeOption.id;
-  
-  const realText = routeOption.isReal ? '(真实计算)' : '(模拟数据)';
-  this.showNotification(`已选择: ${routeOption.optimizationType} 第${routeOption.rank}候选路线 ${realText}`, 'info');
-},
-// 辅助方法：安全计算距离
-calculateDistanceSafe(lng1, lat1, lng2, lat2) {
-  try {
-      const lon1 = parseFloat(lng1);
-      const lat1Val = parseFloat(lat1);
-      const lon2 = parseFloat(lng2);
-      const lat2Val = parseFloat(lat2);
-      
-      if (isNaN(lon1) || isNaN(lat1Val) || isNaN(lon2) || isNaN(lat2Val)) {
-          console.warn('距离计算参数无效:', { lng1, lat1, lng2, lat2 });
+          
+          // 备用计算方法（haversine公式）
+          const R = 6371000; // 地球半径（米）
+          const dLat = (lat2Val - lat1Val) * Math.PI / 180;
+          const dLng = (lon2 - lon1) * Math.PI / 180;
+          const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.cos(lat1Val * Math.PI / 180) * Math.cos(lat2Val * Math.PI / 180) *
+                    Math.sin(dLng/2) * Math.sin(dLng/2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+          return R * c;
+      } catch (error) {
+          console.error('距离计算失败:', error);
           return null;
       }
-      
-      if (window.AMap && AMap.GeometryUtil) {
-          return AMap.GeometryUtil.distance(
-              new AMap.LngLat(lon1, lat1Val),
-              new AMap.LngLat(lon2, lat2Val)
-          );
-      }
-      
-      // 备用计算方法（haversine公式）
-      const R = 6371000; // 地球半径（米）
-      const dLat = (lat2Val - lat1Val) * Math.PI / 180;
-      const dLng = (lon2 - lon1) * Math.PI / 180;
-      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                Math.cos(lat1Val * Math.PI / 180) * Math.cos(lat2Val * Math.PI / 180) *
-                Math.sin(dLng/2) * Math.sin(dLng/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return R * c;
-  } catch (error) {
-      console.error('距离计算失败:', error);
-      return null;
-  }
-},
-
-// 显示选定的路线
-displayRoute(routeOption) {
-  if (!routeOption || !routeOption.routeData) {
-      console.warn('没有路线数据可显示');
-      return;
-  }
-  
-  const mapDisplay = this.$refs.mapDisplayRef;
-  if (mapDisplay) {
-      // 在地图上绘制路线
-      mapDisplay.drawOptimizedRoute(routeOption.routeData);
-  }
-  
-  // 更新路线信息显示
-  this.routeInfo = routeOption.routeData;
-  this.showRouteInfo = true;
-  this.routeSummary = {
-      totalTime: this.formatDuration(routeOption.totalTime / 60), // 转换为分钟
-      totalDistance: this.formatDistance(routeOption.totalDistance),
-      optimizationType: routeOption.optimizationType,
-      combination: routeOption.combination.map(s => s.name).join(' → ')
-  };
-  
-  console.log('显示路线信息:', this.routeSummary);
-},
-
-// 切换到指定路线
-switchToRoute(index) {
-  if (this.routeCombinations && index >= 0 && index < this.routeCombinations.length) {
-      this.currentRouteIndex = index;
-      this.displayRoute(this.routeCombinations[index]);
-      this.showNotification(`已切换到路线 ${index + 1}: ${this.routeCombinations[index].optimizationType}`, 'info');
-  }
-},
-
-    calculateDistanceSafe(lng1, lat1, lng2, lat2) {
-        try {
-            // 验证输入参数
-            const lon1 = parseFloat(lng1);
-            const lat1Val = parseFloat(lat1);
-            const lon2 = parseFloat(lng2);
-            const lat2Val = parseFloat(lat2);
-            
-            if (isNaN(lon1) || isNaN(lat1Val) || isNaN(lon2) || isNaN(lat2Val)) {
-                console.warn('距离计算参数无效:', { lng1, lat1, lng2, lat2 });
-                return null;
-            }
-            
-            if (window.AMap && AMap.GeometryUtil) {
-                return AMap.GeometryUtil.distance(
-                    new AMap.LngLat(lon1, lat1Val),
-                    new AMap.LngLat(lon2, lat2Val)
-                );
-            }
-            
-            // 备用计算方法（haversine公式）
-            const R = 6371000; // 地球半径（米）
-            const dLat = (lat2Val - lat1Val) * Math.PI / 180;
-            const dLng = (lon2 - lon1) * Math.PI / 180;
-            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                      Math.cos(lat1Val * Math.PI / 180) * Math.cos(lat2Val * Math.PI / 180) *
-                      Math.sin(dLng/2) * Math.sin(dLng/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            return R * c;
-        } catch (error) {
-            console.error('距离计算失败:', error);
-            return null;
-        }
     },
 
     // 显示选定的路线
     displayRoute(routeOption) {
-        if (!routeOption || !routeOption.routeData) {
-            return;
-        }
-        
-        const mapDisplay = this.$refs.mapDisplayRef;
-        if (mapDisplay) {
-            // 在地图上绘制路线
-            mapDisplay.drawOptimizedRoute(routeOption.routeData);
-        }
-        
-        // 更新路线信息显示
-        this.routeInfo = routeOption.routeData;
-        this.showRouteInfo = true;
-        this.routeSummary = {
-            totalTime: this.formatDuration(routeOption.totalTime / 60), // 转换为分钟
-            totalDistance: this.formatDistance(routeOption.totalDistance),
-            optimizationType: routeOption.optimizationType,
-            combination: routeOption.combination.map(s => s.name).join(' → ')
-        };
+      if (!routeOption || !routeOption.routeData) {
+          console.warn('没有路线数据可显示');
+          return;
+      }
+      
+      const mapDisplay = this.$refs.mapDisplayRef;
+      if (mapDisplay) {
+          // 在地图上绘制路线
+          mapDisplay.drawOptimizedRoute(routeOption.routeData);
+      }
+      
+      // 更新路线信息显示
+      this.routeInfo = routeOption.routeData;
+      this.showRouteInfo = true;
+      this.routeSummary = {
+          totalTime: this.formatDuration(routeOption.totalTime / 60), // 转换为分钟
+          totalDistance: this.formatDistance(routeOption.totalDistance),
+          optimizationType: routeOption.optimizationType,
+          combination: routeOption.combination.map(s => s.name).join(' → ')
+      };
+      
+      console.log('显示路线信息:', this.routeSummary);
     },
 
     // 切换到指定路线
     switchToRoute(index) {
-        if (this.routeCombinations && index >= 0 && index < this.routeCombinations.length) {
-            this.currentRouteIndex = index;
-            this.displayRoute(this.routeCombinations[index]);
-            this.showNotification(`已切换到路线 ${index + 1}`, 'info');
-        }
+      if (this.routeCombinations && index >= 0 && index < this.routeCombinations.length) {
+          this.currentRouteIndex = index;
+          this.displayRoute(this.routeCombinations[index]);
+          this.showNotification(`已切换到路线 ${index + 1}: ${this.routeCombinations[index].optimizationType}`, 'info');
+      }
     },
 
     // 获取停留时间的安全方法
@@ -4227,6 +4057,7 @@ button[type="submit"]:hover {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s ease;
+  margin-left: 10px;
 }
 
 .select-route-btn:hover {
@@ -4647,6 +4478,70 @@ button[type="submit"]:hover {
   }
 }
 
+/* 添加路线分类显示样式 */
+.route-categories {
+  display: flex;
+  flex-direction: row;
+  gap: 20px;
+}
+
+.route-category {
+  background: #fff;
+  border-radius: 12px;
+  padding: 15px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+  flex: 1;
+}
+
+.route-category h4 {
+  margin: 0 0 15px 0;
+  color: #2c3e50;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #e9ecef;
+  padding-bottom: 10px;
+}
+
+.route-type-badge.time {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.route-type-badge.distance {
+  background: linear-gradient(135deg, #20c997 0%, #28a745 100%);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.time-value {
+  color: #764ba2;
+  font-weight: 600;
+}
+
+.distance-value {
+  color: #28a745;
+  font-weight: 600;
+}
+
+.route-info-badge {
+  background: #f8f9fa;
+  color: #6c757d;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: 10px;
+  margin-left: 10px;
+  font-weight: normal;
+}
+
 /* 通知组件样式 */
 .notification-container {
   position: fixed;
@@ -4931,12 +4826,7 @@ p { color: #666; }
   background: white;
   border-radius: 4px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.route-item:hover {
-  background: #f1f1f1;
+  justify-content: space-between;
 }
 
 .route-item.active {
