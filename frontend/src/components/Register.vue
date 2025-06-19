@@ -1,27 +1,32 @@
 <template>
-  <div class="register-container">
-    <h2>Register</h2>
-    <form @submit.prevent="registerUser">
-      <div class="form-group">
-        <label for="username">Username:</label>
-        <input type="text" id="username" v-model="username" required>
-      </div>
-      <div class="form-group">
-        <label for="password">Password:</label>
-        <input type="password" id="password" v-model="password" required>
-      </div>
-      <button type="submit">Register</button>
-    </form>
-    <p v-if="successMessage" class="success-message">{{ successMessage }}</p>
-    <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
-    <p class="login-link">
-      Already have an account? <router-link to="/login">Login here</router-link>
-    </p>
+  <div class="dashboard-container">
+    <div class="app-header">
+      <h1>智能商店寻路助手</h1>
+      <p class="subtitle">创建新账户</p>
+    </div>
+    
+    <div class="section">
+      <h3><span class="icon">👤</span>用户注册</h3>
+      <form @submit.prevent="registerUser" class="auth-form">
+        <div class="form-group">
+          <label for="username">用户名:</label>
+          <input type="text" id="username" v-model="username" required placeholder="请输入用户名">
+        </div>
+        <div class="form-group">
+          <label for="password">密码:</label>
+          <input type="password" id="password" v-model="password" required placeholder="请输入密码">
+        </div>
+        <button type="submit" class="btn-primary">注册</button>
+      </form>
+      <p v-if="successMessage" class="success-message">{{ successMessage }}</p>
+      <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
+      <p class="auth-link">已有账户? <router-link to="/login">点击登录</router-link></p>
+    </div>
   </div>
 </template>
 
 <script>
-// import axios from 'axios'; // Assuming axios is globally available or configured in main.js
+import axios from 'axios';
 
 export default {
   name: 'Register',
@@ -38,30 +43,20 @@ export default {
       this.successMessage = '';
       this.errorMessage = '';
       try {
-        console.log('Sending registration data:', {
-          username: this.username,
-          password: this.password
-        });
         const response = await axios.post('/api/register', {
           username: this.username,
           password: this.password
-        }, {
-          headers: {
-            'Content-Type': 'application/json'
-          }
         });
         this.successMessage = response.data.message;
-        alert('Registration successful! Please login.');
-        this.$router.push('/login'); // Redirect to login page after successful registration
+        this.$router.push('/login');
+        
+        // 使用更简洁的通知方式
+        this.$nextTick(() => {
+          console.log('注册成功！请登录');
+        });
       } catch (error) {
-        console.error('Registration error details:', error);
-        if (error.response && error.response.data && error.response.data.message) {
-          this.errorMessage = error.response.data.message;
-        } else if (error.request) {
-          this.errorMessage = 'No response from server. Please check your connection or backend.';
-        } else {
-          this.errorMessage = 'Registration failed. Please try again.';
-        }
+        this.errorMessage = (error.response && error.response.data && error.response.data.message) || 'Registration failed. Please try again.';
+        console.error('Registration error:', error);
       }
     }
   }
@@ -69,58 +64,17 @@ export default {
 </script>
 
 <style scoped>
+/* Scoped styles from the original component can be added here if any */
 .register-container {
-  max-width: 400px;
+  max-width: 500px;
   margin: 50px auto;
-  padding: 20px;
-  border: 1px solid #ddd;
+  padding: 2rem;
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
 }
-h2 {
-  text-align: center;
-  color: #333;
-}
-.form-group {
-  margin-bottom: 15px;
-}
-.form-group label {
-  display: block;
-  margin-bottom: 5px;
-  font-weight: bold;
-}
-.form-group input[type="text"],
-.form-group input[type="password"] {
-  width: calc(100% - 22px);
-  padding: 10px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-button[type="submit"] {
-  width: 100%;
-  padding: 10px;
-  background-color: #42b983;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 16px;
-}
-button[type="submit"]:hover {
-  background-color: #36a476;
-}
-.success-message {
-  color: green;
-  margin-top: 10px;
-  text-align: center;
-}
-.error-message {
-  color: red;
-  margin-top: 10px;
-  text-align: center;
-}
-.login-link {
-  margin-top: 15px;
-  text-align: center;
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 </style>

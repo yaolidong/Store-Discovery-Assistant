@@ -1,16 +1,22 @@
 <template>
   <div id="nav">
-    <router-link to="/">Dashboard</router-link> |
-    <router-link to="/login" v-if="!isLoggedIn">Login</router-link>
-    <span v-if="isLoggedIn"> | <a href="#" @click.prevent="logout">Logout</a></span>
-    <router-link to="/register" v-if="!isLoggedIn"> | Register</router-link>
+    <router-link to="/">主页</router-link> |
+    <router-link to="/login" v-if="!isLoggedIn">登录</router-link>
+    <span v-if="isLoggedIn"> | <a href="#" @click.prevent="logout">登出</a></span>
+    <router-link to="/register" v-if="!isLoggedIn"> | 注册</router-link>
   </div>
   <router-view></router-view>
+  <notification-comp ref="notification"></notification-comp>
 </template>
 
 <script>
+import NotificationComp from './components/NotificationComp.vue';
+
 export default {
   name: 'App',
+  components: {
+    NotificationComp
+  },
   computed: {
     isLoggedIn() {
       // Check local storage for a token or user session

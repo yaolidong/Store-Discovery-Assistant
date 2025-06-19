@@ -1,5 +1,5 @@
 <template>
-  <div id="map-container" style="width: 100%; height: 500px;"></div>
+  <div id="map-container" style="width: 100%; height: 500px; border: 1px solid #ccc; border-radius: 8px;"></div>
   <div v-if="showRouteInfo && routeInfo" class="route-info">
     <div class="route-summary">
       <h3>路线摘要</h3>
@@ -49,6 +49,7 @@ export default {
       travelMode: 'DRIVING',
       highlightedPolylineRef: null, // Stores the currently highlighted AMap.Polyline instance
       defaultPolylineStyle: { strokeColor: "#3366FF", strokeOpacity: 0.8, strokeWeight: 6 },
+      isInitialized: false
     };
   },
   watch: {
@@ -60,39 +61,36 @@ export default {
       }
     }
   },
-  mounted() {
-    if (window.AMap) {
-      this.initMap();
-    } else {
-      console.error("Gaode Maps API not loaded. Ensure the script tag is in index.html and the key is valid.");
-      // You might want to add a retry mechanism or a callback if AMap loads later.
-      // For now, we'll assume AMap is available globally when mounted.
-      // If it's loaded asynchronously, this might need adjustment.
-      // A common pattern is to have the AMap script load call a global init function.
-    }
+  async mounted() {
+    await this.initializeMap();
   },
   methods: {
-    initMap() {
-      // Initialize map
-      this.map = new AMap.Map('map-container', {
-        zoom: 11,
-        center: [116.397428, 39.90923], // Default to Beijing
-        resizeEnable: true,
-      });
-
-      // Add controls
-      this.map.addControl(new AMap.ToolBar());
-      this.map.addControl(new AMap.Scale());
-
-      // You can emit an event if needed, to let parent know map is ready
-      // this.$emit('map-ready', this.map);
-
-      // Initialize Geocoder
-      AMap.plugin('AMap.Geocoder', () => {
-        this.geocoder = new AMap.Geocoder({
-          // city: "全国" // default, or specify city for accuracy
+    async initializeMap() {
+      if (window.AMap) {
+        this.map = new AMap.Map('map-container', {
+          zoom: 11,
+          center: [116.397428, 39.90923],
+          resizeEnable: true
         });
-      });
+        
+        // 加载工具栏和比例尺插件
+        AMap.plugin(['AMap.ToolBar', 'AMap.Scale'], () => {
+          this.map.addControl(new AMap.ToolBar());
+          this.map.addControl(new AMap.Scale());
+        });
+        
+        this.isInitialized = true;
+        console.log("地图初始化成功");
+
+        // Initialize Geocoder
+        AMap.plugin('AMap.Geocoder', () => {
+          this.geocoder = new AMap.Geocoder({
+            // city: "全国" // default, or specify city for accuracy
+          });
+        });
+      } else {
+        console.error("高德地图API未加载");
+      }
     },
     enableMapPicking() {
       if (!this.map) return;
@@ -508,6 +506,41 @@ export default {
         return `${(meters / 1000).toFixed(1)}公里`;
       }
       return `${meters}米`;
+    },
+    
+    // 添加缺失的方法
+    clearAllMarkersAndRoutes() {
+      this.clearMapElements();
+    },
+    
+    setHomeLocation(longitude, latitude, address) {
+      if (!this.map) return;
+      
+      const center = new AMap.LngLat(longitude, latitude);
+      this.map.setCenter(center);
+      this.map.setZoom(15);
+      
+      // 清除之前的标记
+      if (this.currentMarker) {
+        this.map.remove(this.currentMarker);
+      }
+      
+      // 添加新的家的位置标记
+      this.currentMarker = new AMap.Marker({
+        position: center,
+        title: address,
+        icon: new AMap.Icon({
+          image: 'data:image/svg+xml;base64,' + btoa(`
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="red">
+              <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+            </svg>
+          `),
+          size: new AMap.Size(32, 32),
+          imageOffset: new AMap.Pixel(-16, -32)
+        })
+      });
+      
+      this.map.add(this.currentMarker);
     }
   },
   beforeUnmount() {

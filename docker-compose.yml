@@ -18,5 +18,6 @@ services:
       - "8080:80"
     depends_on:
       - backend
-    volumes:
-      - ./frontend:/usr/share/nginx/html 
+
+
+  # ... rest of the file remains unchanged ... 
