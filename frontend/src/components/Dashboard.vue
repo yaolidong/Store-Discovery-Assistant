@@ -51,7 +51,8 @@
           type="text" 
           v-model="homeAddress" 
           @input="onAddressInput"
-          @focus="showAddressSuggestions = true"
+          @keyup="testAddressInput"
+          @focus="showAddressSuggestions = true; console.log('地址输入框获得焦点')"
           @blur="hideAddressSuggestions"
           placeholder="请输入您家的地址" 
           class="address-input"
@@ -72,6 +73,8 @@
       <div v-if="homeAddress && homeLocation" class="location-display">
         <i class="icon">📍</i> {{ homeAddress }}
       </div>
+      
+
     </div>
 
     <!-- 店铺列表 -->
@@ -1060,26 +1063,137 @@ export default {
         this.shopsToVisit = [];
         this.routeCombinations = [];
         this.showRouteInfo = false;
+        
+        // 保存城市偏好
+        this.saveCityPreference();
+      }
+    },
+
+    // 保存城市偏好到后端
+    async saveCityPreference() {
+      if (!this.selectedProvince || !this.selectedCity) {
+        return;
+      }
+
+      try {
+        console.log('保存城市偏好:', this.selectedProvince, this.selectedCity);
+        
+        const response = await fetch('/api/user/city-preference', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            province: this.selectedProvince,
+            city: this.selectedCity
+          })
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          console.log('城市偏好保存成功:', result);
+        } else {
+          console.error('保存城市偏好失败:', response.status);
+        }
+      } catch (error) {
+        console.error('保存城市偏好时发生错误:', error);
+      }
+    },
+
+    // 从后端加载用户城市偏好
+    async loadCityPreference() {
+      try {
+        const response = await fetch('/api/user/city-preference', {
+          method: 'GET',
+          credentials: 'include'
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          console.log('加载城市偏好:', result);
+          
+          if (result.preferred_province && result.preferred_city) {
+            this.selectedProvince = result.preferred_province;
+            
+            // 先更新可用城市列表（但不清空selectedCity）
+            const selectedProvince = this.provinces.find(p => p.name === this.selectedProvince);
+            this.availableCities = selectedProvince ? selectedProvince.cities : [];
+            
+            // 然后设置选中的城市
+            this.selectedCity = result.preferred_city;
+            
+            // 设置地图中心
+            const cityInfo = this.availableCities.find(city => city.name === this.selectedCity);
+            if (cityInfo && this.$refs.mapDisplayRef) {
+              this.getCityCenter(cityInfo.adcode);
+            }
+            
+            console.log('城市偏好加载完成:', this.selectedProvince, this.selectedCity);
+            this.showNotification('已加载保存的城市偏好', 'info');
+          }
+        } else {
+          console.log('用户未设置城市偏好或未登录');
+        }
+      } catch (error) {
+        console.error('加载城市偏好时发生错误:', error);
       }
     },
 
     // 地址输入处理
     async onAddressInput() {
+      console.log('=== 地址输入触发 ===');
+      console.log('输入地址:', this.homeAddress);
+      console.log('选择城市:', this.selectedCity);
+      console.log('输入长度:', this.homeAddress.trim().length);
+      
       if (!this.homeAddress.trim() || !this.selectedCity) {
+        console.log('条件不满足，清空建议');
+        console.log('homeAddress为空:', !this.homeAddress.trim());
+        console.log('selectedCity为空:', !this.selectedCity);
         this.addressSuggestions = [];
         return;
       }
 
       try {
-        const response = await fetch(`/api/search-address?query=${encodeURIComponent(this.homeAddress)}&city=${encodeURIComponent(this.selectedCity)}`);
+        const apiUrl = `/api/search-address?query=${encodeURIComponent(this.homeAddress)}&city=${encodeURIComponent(this.selectedCity)}`;
+        console.log('API请求URL:', apiUrl);
+        
+        const response = await fetch(apiUrl);
+        console.log('API响应状态:', response.status);
+        
         if (response.ok) {
           const data = await response.json();
+          console.log('API响应数据:', data);
+          console.log('建议数量:', (data.suggestions || []).length);
+          
           this.addressSuggestions = data.suggestions || [];
+          
+          // 强制更新显示状态
+          if (this.addressSuggestions.length > 0) {
+            this.showAddressSuggestions = true;
+            console.log('设置显示建议为true');
+          }
+          
+          console.log('当前showAddressSuggestions状态:', this.showAddressSuggestions);
+          console.log('最终建议数量:', this.addressSuggestions.length);
+        } else {
+          console.error('API响应错误:', response.status, response.statusText);
+          const errorText = await response.text();
+          console.error('错误详情:', errorText);
+          this.addressSuggestions = [];
         }
       } catch (error) {
         console.error('地址搜索错误:', error);
         this.addressSuggestions = [];
       }
+    },
+
+    // 测试地址输入
+    testAddressInput() {
+      console.log('=== 键盘输入测试 ===');
+      console.log('当前homeAddress值:', this.homeAddress);
+      console.log('当前selectedCity值:', this.selectedCity);
     },
 
     hideAddressSuggestions() {
@@ -1089,23 +1203,144 @@ export default {
     },
 
     selectAddressSuggestion(suggestion) {
+      console.log('=== 选择地址建议 ===');
+      console.log('原始建议数据:', suggestion);
+      
       this.homeAddress = suggestion.name;
-      this.homeLocation = {
-        longitude: parseFloat(suggestion.location.split(',')[0]),
-        latitude: parseFloat(suggestion.location.split(',')[1])
-      };
+      
+      // 处理不同的位置数据格式
+      let longitude, latitude;
+      if (suggestion.location && typeof suggestion.location === 'string') {
+        // 格式: "longitude,latitude"
+        console.log('解析坐标字符串:', suggestion.location);
+        const coords = suggestion.location.split(',');
+        longitude = parseFloat(coords[0]);
+        latitude = parseFloat(coords[1]);
+        console.log('解析后的坐标:', { longitude, latitude });
+      } else if (suggestion.longitude !== undefined && suggestion.latitude !== undefined) {
+        // 直接的经纬度字段
+        longitude = parseFloat(suggestion.longitude);
+        latitude = parseFloat(suggestion.latitude);
+        console.log('直接获取的坐标:', { longitude, latitude });
+      } else {
+        console.error('无法解析位置信息:', suggestion);
+        this.showNotification('位置信息格式错误', 'error');
+        return;
+      }
+      
+      // 验证坐标有效性
+      if (isNaN(longitude) || isNaN(latitude)) {
+        console.error('坐标解析结果无效:', { longitude, latitude });
+        this.showNotification('坐标数据无效', 'error');
+        return;
+      }
+      
+      // 验证坐标范围（中国境内大致范围）
+      if (longitude < 73 || longitude > 135 || latitude < 3 || latitude > 54) {
+        console.warn('坐标超出中国境内范围:', { longitude, latitude });
+      }
+      
+      this.homeLocation = { longitude, latitude };
       this.showAddressSuggestions = false;
+      
+      console.log('=== 最终设置的家位置 ===');
+      console.log('地址:', this.homeAddress);
+      console.log('坐标:', this.homeLocation);
+      console.log('经度 (longitude):', longitude);
+      console.log('纬度 (latitude):', latitude);
       
       // 通知地图组件设置家的位置
       if (this.$refs.mapDisplayRef) {
+        console.log('调用地图组件设置位置...');
         this.$refs.mapDisplayRef.setHomeLocation(
-          this.homeLocation.longitude,
-          this.homeLocation.latitude,
+          longitude,
+          latitude,
           this.homeAddress
         );
+      } else {
+        console.error('地图组件引用不存在!');
       }
       
+      // 保存家位置到后端
+      this.saveHomeLocation();
+      
       this.showNotification('家的位置设置成功', 'success');
+    },
+
+    // 保存家位置到后端
+    async saveHomeLocation() {
+      if (!this.homeLocation || !this.homeAddress) {
+        console.log('没有家位置信息需要保存');
+        return;
+      }
+
+      try {
+        console.log('保存家位置到后端:', this.homeLocation, this.homeAddress);
+        
+        const response = await fetch('/api/user/home', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include', // 包含认证信息
+          body: JSON.stringify({
+            address: this.homeAddress,
+            latitude: this.homeLocation.latitude,
+            longitude: this.homeLocation.longitude
+          })
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          console.log('家位置保存成功:', result);
+          this.showNotification('家位置已保存', 'success');
+        } else {
+          const error = await response.json();
+          console.error('保存家位置失败:', error);
+          this.showNotification('保存家位置失败: ' + (error.message || '未知错误'), 'error');
+        }
+      } catch (error) {
+        console.error('保存家位置时发生错误:', error);
+        this.showNotification('保存家位置时发生网络错误', 'error');
+      }
+    },
+
+    // 从后端加载用户已保存的家位置
+    async loadSavedHomeLocation() {
+      try {
+        const response = await fetch('/api/user/home', {
+          method: 'GET',
+          credentials: 'include'
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          console.log('加载保存的家位置:', result);
+          
+          if (result.home_address && result.home_latitude && result.home_longitude) {
+            this.homeAddress = result.home_address;
+            this.homeLocation = {
+              latitude: result.home_latitude,
+              longitude: result.home_longitude
+            };
+            
+            // 在地图上显示
+            if (this.$refs.mapDisplayRef) {
+              this.$refs.mapDisplayRef.setHomeLocation(
+                this.homeLocation.longitude,
+                this.homeLocation.latitude,
+                this.homeAddress
+              );
+            }
+            
+            this.showNotification('已加载保存的家位置', 'info');
+          }
+        } else {
+          console.log('用户未设置家位置或未登录');
+        }
+      } catch (error) {
+        console.error('加载家位置时发生错误:', error);
+      }
     },
 
     // 店铺输入处理
@@ -1306,11 +1541,30 @@ export default {
         this.$refs.mapDisplayRef.map.setCenter(center);
         this.$refs.mapDisplayRef.map.setZoom(12);
       }
-    }
+    },
+
+
   },
 
   mounted() {
+    console.log('=== Dashboard组件已挂载 ===');
+    console.log('初始化省市数据...');
     this.loadProvinceCityData();
+    
+    console.log('加载用户偏好设置...');
+    // 加载用户保存的偏好设置
+    this.loadCityPreference();
+    this.loadSavedHomeLocation();
+    
+    // 测试地图组件引用
+    setTimeout(() => {
+      console.log('检查地图组件引用:', this.$refs.mapDisplayRef);
+      if (this.$refs.mapDisplayRef) {
+        console.log('地图组件存在');
+      } else {
+        console.log('地图组件不存在');
+      }
+    }, 2000);
   }
 }
 </script>

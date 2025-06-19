@@ -1708,6 +1708,8 @@ class User(UserMixin, db.Model):
     home_address = db.Column(db.String(255), nullable=True)
     home_latitude = db.Column(db.Float, nullable=True)
     home_longitude = db.Column(db.Float, nullable=True)
+    preferred_province = db.Column(db.String(100), nullable=True)  # 用户偏好省份
+    preferred_city = db.Column(db.String(100), nullable=True)      # 用户偏好城市
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -2236,6 +2238,8 @@ def search_address():
         query = request.args.get('query', '').strip()
         city = request.args.get('city', '')
         
+        logger.info(f"地址搜索请求: query={query}, city={city}")
+        
         if not query:
             return jsonify({'suggestions': []}), 200
         
@@ -2256,9 +2260,23 @@ def search_address():
             'citylimit': 'true' if city else 'false'
         }
         
+        logger.info(f"调用高德API: {url}, params: {params}")
+        
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
-        result = response.json()
+        
+        # 确保正确处理中文响应
+        if response.encoding is None or response.encoding == 'ISO-8859-1':
+            response.encoding = 'utf-8'
+        
+        try:
+            result = response.json()
+        except UnicodeDecodeError:
+            # 如果仍然有编码问题，强制使用utf-8解码
+            content = response.content.decode('utf-8', errors='ignore')
+            result = json.loads(content)
+        
+        logger.info(f"高德API响应状态: {result.get('status')}")
         
         suggestions = []
         if result.get('status') == '1' and result.get('tips'):
@@ -2281,6 +2299,7 @@ def search_address():
                         except (ValueError, IndexError):
                             continue
         
+        logger.info(f"返回建议数量: {len(suggestions)}")
         return jsonify({'suggestions': suggestions}), 200
         
     except requests.exceptions.RequestException as e:
@@ -4158,6 +4177,35 @@ def generate_multiple_route_candidates():
             'message': 'Multiple route candidates generation failed',
             'error': str(e) if app.debug else 'Contact support'
         }), 500
+
+# --- User City Preference Endpoints ---
+@app.route('/api/user/city-preference', methods=['GET', 'POST'])
+@login_required
+def city_preference():
+    if request.method == 'POST':
+        data = request.get_json()
+        province = data.get('province')
+        city = data.get('city')
+        
+        logger.info(f"保存用户城市偏好: province={province}, city={city}")
+        
+        # 更新用户城市偏好
+        current_user.preferred_province = province
+        current_user.preferred_city = city
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'City preference updated successfully',
+            'preferred_province': current_user.preferred_province,
+            'preferred_city': current_user.preferred_city
+        }), 200
+    
+    # GET request
+    else:
+        return jsonify({
+            'preferred_province': current_user.preferred_province,
+            'preferred_city': current_user.preferred_city
+        }), 200
 
 if __name__ == '__main__':
     with app.app_context():

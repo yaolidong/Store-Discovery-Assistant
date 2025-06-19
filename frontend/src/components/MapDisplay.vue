@@ -514,33 +514,165 @@ export default {
     },
     
     setHomeLocation(longitude, latitude, address) {
-      if (!this.map) return;
+      console.log('=== 设置家的位置标记 ===');
+      console.log('接收到的参数:');
+      console.log('  经度 (longitude):', longitude, typeof longitude);
+      console.log('  纬度 (latitude):', latitude, typeof latitude);
+      console.log('  地址:', address);
+      console.log('地图对象:', this.map);
+      console.log('地图是否已初始化:', !!this.map);
       
-      const center = new AMap.LngLat(longitude, latitude);
+      if (!this.map) {
+        console.error('地图未初始化');
+        return;
+      }
+      
+      // 验证坐标数值
+      const lng = parseFloat(longitude);
+      const lat = parseFloat(latitude);
+      
+      if (isNaN(lng) || isNaN(lat)) {
+        console.error('坐标数值无效:', { longitude, latitude, lng, lat });
+        return;
+      }
+      
+      console.log('最终使用的坐标:', { lng, lat });
+      console.log('创建AMap.LngLat对象...');
+      
+      const center = new AMap.LngLat(lng, lat);
+      console.log('AMap.LngLat对象:', center);
+      console.log('center.getLng():', center.getLng());
+      console.log('center.getLat():', center.getLat());
+      
+      console.log('设置地图中心...');
       this.map.setCenter(center);
-      this.map.setZoom(15);
+      this.map.setZoom(16);
+      
+      // 强制等待地图渲染后再次确认中心位置
+      setTimeout(() => {
+        console.log('延迟确认地图中心...');
+        this.map.setCenter(center);  // 再次设置确保生效
+        console.log('最终地图中心:', this.map.getCenter());
+        console.log('目标中心坐标:', center);
+      }, 100);
+      
+      console.log('当前地图中心:', this.map.getCenter());
+      console.log('当前地图缩放级别:', this.map.getZoom());
       
       // 清除之前的标记
       if (this.currentMarker) {
+        console.log('移除之前的标记');
         this.map.remove(this.currentMarker);
+        this.currentMarker = null;
       }
       
-      // 添加新的家的位置标记
-      this.currentMarker = new AMap.Marker({
-        position: center,
-        title: address,
-        icon: new AMap.Icon({
-          image: 'data:image/svg+xml;base64,' + btoa(`
-            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="red">
-              <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
-            </svg>
-          `),
-          size: new AMap.Size(32, 32),
-          imageOffset: new AMap.Pixel(-16, -32)
-        })
-      });
-      
-      this.map.add(this.currentMarker);
+      try {
+        // 创建家的位置标记，使用简单的默认图标和红色样式
+        this.currentMarker = new AMap.Marker({
+          position: center,
+          title: `家: ${address}`,
+          // 使用高德地图的默认图标，但设置为红色
+          icon: '//a.amap.com/jsapi_demos/static/demo-center/icons/poi-marker-red.png',
+          // 移除offset，让标记准确显示在坐标位置
+          anchor: 'center'  // 设置为中心对齐，这样标记的中心就在坐标点上
+        });
+        
+        console.log('标记位置坐标:', this.currentMarker.getPosition());
+        console.log('地图中心坐标:', this.map.getCenter());
+        
+        console.log('标记对象创建成功:', this.currentMarker);
+        
+        // 添加标记到地图
+        this.map.add(this.currentMarker);
+        console.log('标记已添加到地图');
+        
+        // 创建信息窗口
+        const infoWindow = new AMap.InfoWindow({
+          content: `<div style="padding: 10px; min-width: 200px;">
+            <h4 style="margin: 0 0 8px 0; color: #333; font-size: 16px;">🏠 家的位置</h4>
+            <p style="margin: 0; color: #666; font-size: 14px; line-height: 1.4;">${address}</p>
+          </div>`,
+          offset: new AMap.Pixel(0, -35)
+        });
+        
+        // 点击标记时显示信息窗口
+        this.currentMarker.on('click', () => {
+          console.log('标记被点击，显示信息窗口');
+          infoWindow.open(this.map, this.currentMarker.getPosition());
+        });
+        
+        // 验证标记和地图中心位置是否一致
+        setTimeout(() => {
+          if (this.currentMarker) {
+            const markerPos = this.currentMarker.getPosition();
+            const mapCenter = this.map.getCenter();
+            
+            console.log('=== 位置验证 ===');
+            console.log('标记坐标:', markerPos.getLng(), markerPos.getLat());
+            console.log('地图中心:', mapCenter.getLng(), mapCenter.getLat());
+            
+            // 计算偏差
+            const lngDiff = Math.abs(markerPos.getLng() - mapCenter.getLng());
+            const latDiff = Math.abs(markerPos.getLat() - mapCenter.getLat());
+            
+            console.log('坐标偏差:', { lngDiff, latDiff });
+            
+                         if (lngDiff > 0.001 || latDiff > 0.001) {
+               console.warn('标记位置与地图中心存在明显偏差!');
+               // 重新对齐地图中心到标记位置
+               this.map.setCenter(markerPos);
+               console.log('已重新对齐地图中心到标记位置');
+               
+               // 再次验证对齐
+               setTimeout(() => {
+                 const newCenter = this.map.getCenter();
+                 console.log('重新对齐后的地图中心:', newCenter.getLng(), newCenter.getLat());
+               }, 200);
+             } else {
+               console.log('✅ 标记位置与地图中心已对齐');
+             }
+             
+             // 最终强制对齐到标记位置（无论如何都执行）
+             this.map.setCenter(markerPos);
+             console.log('🎯 执行最终强制对齐到标记位置');
+            
+            infoWindow.open(this.map, this.currentMarker.getPosition());
+            console.log('自动显示信息窗口');
+          }
+        }, 500);
+        
+        console.log('家的位置标记设置完成');
+        
+        // 创建持续监控和对齐机制
+        let alignmentAttempts = 0;
+        const ensureAlignment = () => {
+          if (alignmentAttempts >= 5) return; // 最多尝试5次
+          
+          alignmentAttempts++;
+          if (this.currentMarker && this.map) {
+            const markerPos = this.currentMarker.getPosition();
+            this.map.setCenter(markerPos);
+            console.log(`🔄 对齐尝试 ${alignmentAttempts}: 重新设置地图中心到标记位置`);
+            
+            setTimeout(ensureAlignment, 300); // 每300ms检查一次
+          }
+        };
+        
+        // 开始对齐监控
+        setTimeout(ensureAlignment, 200);
+        
+      } catch (error) {
+        console.error('创建标记时出错:', error);
+        
+        // 备用方案：使用更简单的标记
+        this.currentMarker = new AMap.Marker({
+          position: center,
+          title: `家: ${address}`
+        });
+        
+        this.map.add(this.currentMarker);
+        console.log('使用备用标记方案');
+      }
     }
   },
   beforeUnmount() {
