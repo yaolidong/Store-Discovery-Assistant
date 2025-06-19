@@ -1120,9 +1120,149 @@ const Dashboard = {
            
            <!-- 详细路线步骤 -->
            <div class="route-details">
-             <h3><i class="icon">🗺️</i> 详细路线</h3>
-             <div v-if="routeInfo && routeInfo.route_segments && routeInfo.route_segments.length > 0" class="route-segments">
-               <div v-for="(segment, index) in routeInfo.route_segments" :key="'segment_' + index" class="route-segment">
+             <h3><i class="icon">🗺️</i> 详细路线指导</h3>
+             
+             <!-- 公交路线详细显示 -->
+             <div v-if="travelMode === 'TRANSIT' && routeInfo && routeInfo.route_segments && routeInfo.route_segments.length > 0" class="transit-route-details">
+               <div v-for="(segment, index) in routeInfo.route_segments" :key="'transit_segment_' + index" class="transit-segment">
+                 <div class="segment-header">
+                   <span class="segment-number">{{ index + 1 }}</span>
+                   <span class="segment-title">
+                     <i class="icon">{{ getSegmentIcon(segment.type) }}</i>
+                     {{ segment.from_name }} → {{ segment.to_name }}
+                   </span>
+                 </div>
+                 <div class="segment-content">
+                   <div class="segment-stats">
+                     <span class="stat-time">⏱️ {{ formatDuration((segment.duration || 0) / 60) }}</span>
+                     <span class="stat-distance">📏 {{ formatDistance(segment.distance || 0) }}</span>
+                     <span v-if="segment.cost" class="stat-cost">💰 {{ segment.cost }}元</span>
+                   </div>
+                   
+                   <!-- 步行段详细指导 -->
+                   <div v-if="segment.type === 'walking'" class="walking-instructions">
+                     <div class="instruction-header">
+                       <i class="icon">🚶</i>
+                       <span class="instruction-title">步行指导</span>
+                     </div>
+                     <div v-if="segment.steps && segment.steps.length > 0" class="instruction-steps">
+                       <div v-for="(step, stepIndex) in segment.steps" :key="'walk_step_' + stepIndex" class="instruction-step">
+                         <div class="step-content">
+                           <i class="step-icon">➤</i>
+                           <span class="step-text">{{ step.instruction || '继续步行' }}</span>
+                         </div>
+                         <div v-if="step.distance || step.duration" class="step-meta">
+                           <span v-if="step.distance" class="step-distance">{{ step.distance }}米</span>
+                           <span v-if="step.duration" class="step-duration">{{ Math.round(step.duration / 60) }}分钟</span>
+                         </div>
+                       </div>
+                     </div>
+                     <div v-else class="simple-instruction">
+                       从 {{ segment.from_name }} 步行至 {{ segment.to_name }}
+                     </div>
+                   </div>
+                   
+                   <!-- 公交段详细指导 -->
+                   <div v-else-if="segment.type === 'bus'" class="bus-instructions">
+                     <div class="instruction-header">
+                       <i class="icon">🚌</i>
+                       <span class="instruction-title">公交指导</span>
+                     </div>
+                     <div v-if="segment.lines && segment.lines.length > 0" class="bus-lines">
+                       <div v-for="(line, lineIndex) in segment.lines" :key="'bus_line_' + lineIndex" class="bus-line">
+                         <div class="line-info">
+                           <div class="line-header">
+                             <span class="line-number">{{ extractBusNumber(line.name) }}路</span>
+                             <span class="line-name">{{ line.name }}</span>
+                           </div>
+                           <div class="line-route">
+                             <div class="station-info departure">
+                               <span class="station-label">上车站</span>
+                               <span class="station-name">{{ line.departure_stop ? line.departure_stop.name : segment.from_name }}</span>
+                             </div>
+                             <div class="route-arrow">
+                               <i class="icon">🚌</i>
+                               <span class="stops-count">{{ calculateStopsCount(line) }}站</span>
+                               <i class="icon">→</i>
+                             </div>
+                             <div class="station-info arrival">
+                               <span class="station-label">下车站</span>
+                               <span class="station-name">{{ line.arrival_stop ? line.arrival_stop.name : segment.to_name }}</span>
+                             </div>
+                           </div>
+                           <div v-if="line.via_stops && line.via_stops.length > 0" class="via-stops">
+                             <span class="via-label">途径站点：</span>
+                             <span class="via-stations">{{ line.via_stops.map(s => s.name).join(' → ') }}</span>
+                           </div>
+                         </div>
+                       </div>
+                     </div>
+                     <div v-else class="simple-instruction">
+                       乘坐公交从 {{ segment.from_name }} 到 {{ segment.to_name }}
+                     </div>
+                   </div>
+                   
+                   <!-- 地铁段详细指导 -->
+                   <div v-else-if="segment.type === 'subway' || segment.type === 'railway'" class="subway-instructions">
+                     <div class="instruction-header">
+                       <i class="icon">🚇</i>
+                       <span class="instruction-title">地铁指导</span>
+                     </div>
+                     <div v-if="segment.railway" class="subway-lines">
+                       <div class="subway-line">
+                         <div class="line-info">
+                           <div class="line-header">
+                             <span class="subway-line-number">{{ extractSubwayLine(segment.railway.name) }}</span>
+                             <span v-if="segment.railway.trip" class="train-number">{{ segment.railway.trip }}</span>
+                           </div>
+                           <div class="line-route">
+                             <div class="station-info departure">
+                               <span class="station-label">进站</span>
+                               <span class="station-name">{{ segment.railway.departure_stop ? segment.railway.departure_stop.name : segment.from_name }}</span>
+                             </div>
+                             <div class="route-arrow">
+                               <i class="icon">🚇</i>
+                               <span class="stops-count">{{ calculateSubwayStops(segment.railway) }}站</span>
+                               <i class="icon">→</i>
+                             </div>
+                             <div class="station-info arrival">
+                               <span class="station-label">出站</span>
+                               <span class="station-name">{{ segment.railway.arrival_stop ? segment.railway.arrival_stop.name : segment.to_name }}</span>
+                             </div>
+                           </div>
+                           <div v-if="segment.railway.via_stops && segment.railway.via_stops.length > 0" class="via-stops">
+                             <span class="via-label">途径站点：</span>
+                             <span class="via-stations">{{ segment.railway.via_stops.map(s => s.name).join(' → ') }}</span>
+                           </div>
+                         </div>
+                       </div>
+                     </div>
+                     <div v-else class="simple-instruction">
+                       乘坐地铁从 {{ segment.from_name }} 到 {{ segment.to_name }}
+                     </div>
+                   </div>
+                   
+                   <!-- 其他交通方式 -->
+                   <div v-else class="other-instructions">
+                     <div v-if="segment.steps && segment.steps.length > 0" class="instruction-steps">
+                       <div v-for="(step, stepIndex) in segment.steps" :key="'other_step_' + stepIndex" class="instruction-step">
+                         <div class="step-content">
+                           <i class="step-icon">➤</i>
+                           <span class="step-text">{{ step.instruction || '按路线前行' }}</span>
+                         </div>
+                       </div>
+                     </div>
+                     <div v-else class="simple-instruction">
+                       从 {{ segment.from_name }} 前往 {{ segment.to_name }}
+                     </div>
+                   </div>
+                 </div>
+               </div>
+             </div>
+             
+             <!-- 驾车路线显示 -->
+             <div v-else-if="travelMode === 'DRIVING' && routeInfo && routeInfo.route_segments && routeInfo.route_segments.length > 0" class="driving-route-details">
+               <div v-for="(segment, index) in routeInfo.route_segments" :key="'driving_segment_' + index" class="route-segment">
                  <div class="segment-header">
                    <span class="segment-number">{{ index + 1 }}</span>
                    <span class="segment-from-to">
@@ -1145,6 +1285,8 @@ const Dashboard = {
                  </div>
                </div>
              </div>
+             
+             <!-- 访问顺序显示 -->
              <div v-else-if="routeInfo && routeInfo.optimized_order && routeInfo.optimized_order.length > 0" class="route-order">
                <h4><i class="icon">🚩</i> 最优访问顺序</h4>
                <div class="order-list">
@@ -1157,6 +1299,8 @@ const Dashboard = {
                  </div>
                </div>
              </div>
+             
+             <!-- 无详细路线时的提示 -->
              <div v-else class="no-route-details">
                <p>路线详情正在加载中...</p>
                <p v-if="showDebugInfo">调试信息：routeInfo 结构 - {{ JSON.stringify(routeInfo, null, 2) }}</p>
@@ -1226,7 +1370,8 @@ const Dashboard = {
       // 多路线组合
       routeCombinations: [], // 所有可能的路线组合
       currentRouteIndex: 0, // 当前显示的路线索引
-      currentRouteShops: [] // 当前路线包含的店铺
+      currentRouteShops: [], // 当前路线包含的店铺
+      selectedRouteId: null // 当前选中的路线ID
     };
   },
   computed: {
@@ -1275,14 +1420,34 @@ const Dashboard = {
         return { valid: false, message: '❌ 未添加任何店铺' };
       }
       const chainStores = this.shopsToVisit.filter(s => s.type === 'chain');
-      const privateStores = this.shopsToVisit.filter(s => s.type !== 'chain' && s.latitude && s.longitude);
-      if (chainStores.length === 0 && privateStores.length === 0) {
+      const privateStoresWithCoords = this.shopsToVisit.filter(s => 
+        s.type !== 'chain' && s.latitude && s.longitude && 
+        !isNaN(parseFloat(s.latitude)) && !isNaN(parseFloat(s.longitude))
+      );
+      const privateStoresPending = this.shopsToVisit.filter(s => 
+        s.type !== 'chain' && (!s.latitude || !s.longitude || 
+        isNaN(parseFloat(s.latitude)) || isNaN(parseFloat(s.longitude)))
+      );
+      
+      const totalPrivateStores = privateStoresWithCoords.length + privateStoresPending.length;
+      
+      if (chainStores.length === 0 && totalPrivateStores === 0) {
         return { valid: false, message: '❌ 没有有效的店铺数据' };
       }
-      return { 
-        valid: true, 
-        message: `✅ ${this.shopsToVisit.length} 个店铺 (${chainStores.length} 连锁, ${privateStores.length} 私人)` 
-      };
+      
+      let message = `✅ ${this.shopsToVisit.length} 个店铺`;
+      if (chainStores.length > 0) message += ` (${chainStores.length} 连锁`;
+      if (totalPrivateStores > 0) {
+        if (chainStores.length > 0) message += `, `;
+        else message += ` (`;
+        message += `${totalPrivateStores} 私人`;
+        if (privateStoresPending.length > 0) {
+          message += `, ${privateStoresPending.length} 待定位`;
+        }
+      }
+      message += ')';
+      
+      return { valid: true, message };
     }
   },
   methods: {
@@ -2551,12 +2716,91 @@ const Dashboard = {
                 this.showNotification('请先添加要探访的店铺', 'error');
                 return;
             }
-            const privateStores = this.shopsToVisit.filter(s => {
-                return s.type !== 'chain' && s.latitude && s.longitude && 
-                       !isNaN(parseFloat(s.latitude)) && !isNaN(parseFloat(s.longitude));
+
+            // 修复：分别处理私人店铺和连锁店铺，确保私人店铺不会被错误过滤
+            const privateStores = [];
+            const chainStores = [];
+            const pendingStores = []; // 需要查询坐标信息的店铺
+
+            // 重新分类店铺
+            for (const shop of this.shopsToVisit) {
+                if (shop.type === 'chain') {
+                    chainStores.push(shop);
+                } else {
+                    // 对于私人店铺，检查是否有坐标信息
+                    if (shop.latitude && shop.longitude && 
+                        !isNaN(parseFloat(shop.latitude)) && !isNaN(parseFloat(shop.longitude))) {
+                        privateStores.push(shop);
+                    } else {
+                        // 如果没有坐标信息，标记为需要查询
+                        pendingStores.push(shop);
+                    }
+                }
+            }
+
+            console.log('🏪 店铺分类结果:', {
+                privateStores: privateStores.length,
+                chainStores: chainStores.length,
+                pendingStores: pendingStores.length
             });
-            const chainStores = this.shopsToVisit.filter(s => s.type === 'chain');
+
             let allShops = [...privateStores];
+
+            // 处理需要查询坐标的私人店铺
+            if (pendingStores.length > 0) {
+                this.showNotification(`正在获取${pendingStores.length}个私人店铺的详细信息...`, 'info');
+                
+                for (const pendingShop of pendingStores) {
+                    try {
+                        const response = await axios.post('/api/shops/find', {
+                            keywords: pendingShop.name,
+                            city: this.selectedCity,
+                            latitude: this.homeLocation.latitude,
+                            longitude: this.homeLocation.longitude,
+                            radius: 50000,
+                            get_details: true
+                        });
+
+                        const shops = response.data.shops || [];
+                        if (shops.length > 0) {
+                            // 找到最接近的店铺
+                            const closestShop = shops
+                                .filter(s => s.latitude && s.longitude)
+                                .map(s => ({
+                                    ...s,
+                                    distanceToHome: this.calculateDistanceSafe(
+                                        this.homeLocation.longitude,
+                                        this.homeLocation.latitude,
+                                        s.longitude,
+                                        s.latitude
+                                    )
+                                }))
+                                .sort((a, b) => a.distanceToHome - b.distanceToHome)[0];
+
+                            if (closestShop) {
+                                allShops.push({
+                                    id: pendingShop.id,
+                                    name: closestShop.name,
+                                    latitude: parseFloat(closestShop.latitude),
+                                    longitude: parseFloat(closestShop.longitude),
+                                    address: closestShop.address || '地址未知',
+                                    stay_duration: this.getStayDuration(pendingShop.id) * 60,
+                                    type: 'private'
+                                });
+                                console.log(`✅ 找到私人店铺: ${closestShop.name}`);
+                            } else {
+                                console.warn(`⚠️ 未找到私人店铺坐标: ${pendingShop.name}`);
+                                this.showNotification(`未找到"${pendingShop.name}"的具体位置`, 'warning');
+                            }
+                        } else {
+                            console.warn(`⚠️ 搜索私人店铺失败: ${pendingShop.name}`);
+                            this.showNotification(`未找到店铺"${pendingShop.name}"`, 'warning');
+                        }
+                    } catch (error) {
+                        console.error(`搜索私人店铺 ${pendingShop.name} 失败:`, error);
+                    }
+                }
+            }
 
             // 并发处理连锁店分店搜索
             if (chainStores.length > 0) {
@@ -2568,12 +2812,16 @@ const Dashboard = {
                 searchResults.forEach((result, index) => {
                     if (result.status === 'fulfilled' && result.value) {
                         allShops.push(result.value);
+                        console.log(`✅ 找到连锁店铺: ${result.value.name}`);
                     } else {
                         console.error(`搜索 ${chainStores[index].name} 失败:`, result.reason);
                         this.showNotification(`${chainStores[index].name} 分店搜索失败`, 'warning');
                     }
                 });
             }
+
+            console.log('🎯 最终用于路线规划的店铺:', allShops);
+            
             // 继续后续逻辑
             await this.processRouteOptimization(allShops);
         } catch (error) {
@@ -2658,7 +2906,7 @@ const Dashboard = {
                 address: shop.address,
                 stay_duration: shop.stay_duration || (this.getStayDuration(shop.id) * 60)
             })),
-            mode: this.travelMode.toLowerCase(),
+            mode: this.travelMode === 'TRANSIT' ? 'public_transit' : this.travelMode.toLowerCase(),
             city: this.selectedCity || '北京',
             top_n: 10
         };
@@ -2741,13 +2989,79 @@ const Dashboard = {
     },
 
     // 选择特定路线的方法
-    selectRoute(routeOption) {
+    async selectRoute(routeOption) {
+      // 如果是路线候选（只有摘要信息），从后端获取详细信息
+      if (routeOption.id && !routeOption.routeData && !routeOption.steps) {
+        try {
+          this.showNotification('正在获取详细路线信息...', 'info');
+          
+          const response = await fetch(`http://localhost:5000/api/route/directions/${routeOption.id}`);
+          if (!response.ok) {
+            throw new Error('无法获取路线详情');
+          }
+          
+          const detailedRoute = await response.json();
+          console.log('获取到详细路线信息:', detailedRoute);
+          console.log('原始segments:', detailedRoute.segments);
+          
+          // 更新路线信息显示，确保数据结构与模板匹配
+          const processedTransitSegments = this.processTransitSegments(detailedRoute.segments || []);
+          console.log('处理后的公交段:', processedTransitSegments);
+          
+          this.routeInfo = {
+            segments: detailedRoute.segments || [],
+            steps: detailedRoute.steps || [],
+            distance: detailedRoute.distance,
+            duration: detailedRoute.duration,
+            cost: detailedRoute.cost,
+            walking_distance: detailedRoute.walking_distance,
+            polyline: detailedRoute.polyline,
+            // 为了兼容模板，添加route_segments字段，确保公交详细步骤可见
+            route_segments: processedTransitSegments.map(segment => ({
+              ...segment,
+              mode: 'public_transit' // 确保标记为公交模式
+            }))
+          };
+          
+          console.log('最终的routeInfo:', this.routeInfo);
+          console.log('route_segments:', this.routeInfo.route_segments);
+          this.showRouteInfo = true;
+          this.selectedRouteId = routeOption.id;
+          
+          this.routeSummary = {
+            totalTime: this.formatDuration(detailedRoute.duration / 60),
+            totalDistance: this.formatDistance(detailedRoute.distance),
+            optimizationType: routeOption.summary || '公交路线',
+            walkingDistance: this.formatDistance(detailedRoute.walking_distance || 0)
+          };
+          
+          // 在地图上显示路线
+          const mapDisplay = this.$refs.mapDisplayRef;
+          if (mapDisplay && detailedRoute.polyline) {
+            mapDisplay.drawOptimizedRoute({ 
+              polyline: detailedRoute.polyline,
+              segments: detailedRoute.segments
+            });
+          }
+          
+          this.showNotification('路线详情已加载', 'success');
+          
+        } catch (error) {
+          console.error('获取路线详情失败:', error);
+          this.showNotification('获取路线详情失败，请重试', 'error');
+        }
+        return;
+      }
+      
+      // 处理已有完整数据的路线
       if (!routeOption || !routeOption.routeData) {
           console.warn('没有路线数据可显示');
           return;
       }
       
       console.log('选择路线:', routeOption);
+      console.log('当前出行方式:', this.travelMode);
+      console.log('路线数据结构:', routeOption.routeData);
       
       const mapDisplay = this.$refs.mapDisplayRef;
       if (mapDisplay) {
@@ -2755,8 +3069,15 @@ const Dashboard = {
           mapDisplay.drawOptimizedRoute(routeOption.routeData);
       }
       
+      // 预处理路线数据，确保公交路线段有正确的结构
+      console.log('原始route_segments:', routeOption.routeData.route_segments);
+      const processedRouteInfo = this.preprocessRouteData(routeOption.routeData);
+      console.log('预处理后的routeInfo:', processedRouteInfo);
+      console.log('预处理后的route_segments:', processedRouteInfo.route_segments);
+      
       // 更新路线信息显示
-      this.routeInfo = routeOption.routeData;
+      this.routeInfo = processedRouteInfo;
+      this.selectedRoute = processedRouteInfo; // 重要：确保Dashboard.vue能获取到正确的数据
       this.showRouteInfo = true;
       this.currentSelectedRoute = routeOption;
       
@@ -2778,6 +3099,108 @@ const Dashboard = {
       
       const realText = routeOption.isReal ? '(真实计算)' : '(模拟数据)';
       this.showNotification(`已选择: ${routeOption.optimizationType} 第${routeOption.rank}候选路线 ${realText}`, 'info');
+    },
+
+    // 预处理路线数据，确保公交段有正确的数据结构
+    preprocessRouteData(routeData) {
+      if (!routeData || !routeData.route_segments) {
+        console.log('没有route_segments，返回原始数据');
+        return routeData;
+      }
+      
+      console.log('开始预处理route_segments，当前出行方式:', this.travelMode);
+      
+      // 处理每个路线段，确保有正确的类型和数据结构
+      const processedSegments = routeData.route_segments.map((segment, index) => {
+        console.log(`处理第${index}个segment:`, segment);
+        const processedSegment = { ...segment };
+        
+        // 关键修复：检查segment是否有transit_segments（公交详细信息）
+        if (segment.transit_segments && Array.isArray(segment.transit_segments)) {
+          console.log(`segment ${index} 有transit_segments，设置为公交模式`);
+          // 使用transit_segments处理公交路线的详细步骤
+          const transitSteps = this.processTransitSegments(segment.transit_segments);
+          processedSegment.steps = transitSteps[0]?.steps || [];
+          processedSegment.mode = 'public_transit';
+          console.log(`segment ${index} 处理后的mode:`, processedSegment.mode);
+          return processedSegment;
+        }
+        
+        // 如果有segments数据(来自公交API)，提取其中的公交/地铁信息
+        if (segment.segments && Array.isArray(segment.segments)) {
+          console.log(`segment ${index} 有segments，设置为公交模式`);
+          const transitSteps = this.processTransitSegments(segment.segments);
+          processedSegment.steps = transitSteps[0]?.steps || [];
+          processedSegment.mode = 'public_transit';
+          console.log(`segment ${index} 处理后的mode:`, processedSegment.mode);
+          return processedSegment;
+        }
+        
+        // 如果当前是公交出行方式，但segment没有明确的公交信息，强制设置为公交模式
+        if (this.travelMode === 'TRANSIT' && !segment.mode) {
+          console.log(`segment ${index} 当前是公交出行方式，强制设置为公交模式`);
+          processedSegment.mode = 'public_transit';
+          // 如果有steps，检查是否包含公交信息
+          if (segment.steps && Array.isArray(segment.steps)) {
+            processedSegment.steps = segment.steps;
+          } else {
+            // 创建基本的公交指导步骤
+            processedSegment.steps = [{
+              type: 'transit',
+              instruction: `乘坐公交从${segment.from_name || '起点'}到${segment.to_name || '终点'}`
+            }];
+          }
+          console.log(`segment ${index} 强制设置后的mode:`, processedSegment.mode);
+          return processedSegment;
+        }
+        
+        // 根据segment中的数据判断交通方式类型
+        if (segment.walking) {
+          processedSegment.type = 'walking';
+          processedSegment.steps = segment.walking.steps || [];
+        } else if (segment.bus) {
+          processedSegment.type = 'bus';
+          processedSegment.lines = segment.bus.lines || [];
+        } else if (segment.railway) {
+          processedSegment.type = 'railway';
+          // 确保railway数据结构正确
+        } else if (segment.subway) {
+          processedSegment.type = 'subway';
+          processedSegment.railway = segment.subway;
+        } else if (segment.steps && Array.isArray(segment.steps)) {
+          // 检查steps中是否有公交信息
+          const hasTransitInfo = segment.steps.some(step => 
+            step.type === 'bus' || step.type === 'railway' || step.instruction.includes('公交') || step.instruction.includes('地铁')
+          );
+          
+          if (hasTransitInfo) {
+            // 将steps转换为route_segments格式
+            return segment.steps.map(step => ({
+              from_name: step.from || segment.from_name || '起点',
+              to_name: step.to || segment.to_name || '终点',
+              type: step.type || 'unknown',
+              instruction: step.instruction,
+              duration: step.duration || 0,
+              distance: step.distance || 0
+            }));
+          }
+        }
+        
+        // 确保每个segment都有from_name和to_name
+        if (!processedSegment.from_name) {
+          processedSegment.from_name = '起点';
+        }
+        if (!processedSegment.to_name) {
+          processedSegment.to_name = '终点';
+        }
+        
+        return processedSegment;
+      }).flat(); // 使用flat()来处理可能的嵌套数组
+      
+      return {
+        ...routeData,
+        route_segments: processedSegments
+      };
     },
     // 辅助方法：安全计算距离
     calculateDistanceSafe(lng1, lat1, lng2, lat2) {
@@ -3073,6 +3496,241 @@ const Dashboard = {
         this.displayRoute(this.routeCombinations[index]);
         this.showNotification(`已切换到路线 ${index + 1}`, 'info');
       }
+    },
+
+    // 获取路段图标
+    getSegmentIcon(segmentType) {
+      const iconMap = {
+        'walking': '🚶',
+        'bus': '🚌',
+        'subway': '🚇',
+        'railway': '🚇',
+        'taxi': '🚕',
+        'driving': '🚗'
+      };
+      return iconMap[segmentType] || '🚶';
+    },
+
+    // 计算公交车站数
+    calculateStopsCount(line) {
+      if (!line) return 0;
+      
+      // 计算站数：途径站点数 + 1（到达站）
+      const viaStops = line.via_stops ? line.via_stops.length : 0;
+      return viaStops + 1;
+    },
+
+    // 计算地铁站数
+    calculateSubwayStops(railway) {
+      if (!railway) return 0;
+      
+      // 计算站数：途径站点数 + 1（到达站）
+      const viaStops = railway.via_stops ? railway.via_stops.length : 0;
+      return viaStops + 1;
+    },
+
+    // 格式化公交路线的站点信息
+    formatStopsInfo(line) {
+      if (!line) return '';
+      
+      const departure = line.departure_stop ? line.departure_stop.name : '起点';
+      const arrival = line.arrival_stop ? line.arrival_stop.name : '终点';
+      const stopsCount = this.calculateStopsCount(line);
+      
+      return `${departure} → ${arrival} (${stopsCount}站)`;
+    },
+
+    // 格式化地铁路线的站点信息
+    formatSubwayStopsInfo(railway) {
+      if (!railway) return '';
+      
+      const departure = railway.departure_stop ? railway.departure_stop.name : '起点';
+      const arrival = railway.arrival_stop ? railway.arrival_stop.name : '终点';
+      const stopsCount = this.calculateSubwayStops(railway);
+      
+      return `${departure} → ${arrival} (${stopsCount}站)`;
+    },
+
+    // 处理公交路线数据，确保正确的数据结构
+    processTransitSegment(segment) {
+      if (!segment) return segment;
+      
+      // 确保segment有正确的类型
+      if (segment.bus && segment.bus.lines) {
+        segment.type = 'bus';
+        segment.lines = segment.bus.lines;
+      } else if (segment.railway) {
+        segment.type = 'railway';
+      } else if (segment.walking) {
+        segment.type = 'walking';
+        segment.steps = segment.walking.steps || [];
+      }
+      
+      return segment;
+    },
+
+    // 处理后端返回的公交路线段数据，转换为前端模板可用的格式
+    processTransitSegments(segments) {
+      if (!segments || !Array.isArray(segments)) {
+        console.warn('processTransitSegments: 无效的segments参数', segments);
+        return [];
+      }
+
+      // 将每个公交segment转换为适合前端显示的steps格式
+      const processedSteps = [];
+
+      segments.forEach((segment, segmentIndex) => {
+        // 防护：确保segment对象存在
+        if (!segment) {
+          console.warn(`processTransitSegments: 第${segmentIndex}个segment为空`);
+          return;
+        }
+        // 步行段
+        if (segment.walking && segment.walking.steps) {
+          segment.walking.steps.forEach(step => {
+            // 防护：确保step对象存在
+            if (!step) return;
+            processedSteps.push({
+              type: 'walk',
+              instruction: step.instruction || `步行 ${step.distance || 0}米，约${Math.round((step.duration || 0) / 60)}分钟`,
+              distance: step.distance || 0,
+              duration: step.duration || 0
+            });
+          });
+        }
+
+        // 公交段
+        if (segment.bus && segment.bus.lines) {
+          segment.bus.lines.forEach(line => {
+            // 防护：确保line对象存在
+            if (!line) return;
+            const departureStop = line.departure_stop?.name || '起点站';
+            const arrivalStop = line.arrival_stop?.name || '终点站';
+            const lineName = line.name || '未知线路';
+            const viaStops = line.via_stops || [];
+            const stopsCount = viaStops.length + 1;
+            
+            let instruction = `乘坐${lineName}，从${departureStop}到${arrivalStop}`;
+            if (stopsCount > 1) {
+              instruction += `（${stopsCount}站）`;
+            }
+            if (viaStops.length > 0) {
+              const viaStopNames = viaStops.filter(stop => stop && stop.name).map(stop => stop.name).join('、');
+              instruction += `，途经：${viaStopNames}`;
+            }
+
+            processedSteps.push({
+              type: 'bus',
+              instruction: instruction,
+              line_name: lineName,
+              departure_stop: departureStop,
+              arrival_stop: arrivalStop,
+              via_stops: viaStops,
+              distance: line.distance || 0,
+              duration: line.duration || 0
+            });
+          });
+        }
+
+        // 地铁段
+        if (segment.railway) {
+          const railway = segment.railway.alters ? segment.railway.alters[0] : segment.railway;
+          // 防护：确保railway对象存在
+          if (!railway) return;
+          const departureStop = railway.departure_stop?.name || '起点站';
+          const arrivalStop = railway.arrival_stop?.name || '终点站';
+          const lineName = railway.name || '未知线路';
+          const trip = railway.trip || '';
+          const viaStops = railway.via_stops || [];
+          const stopsCount = viaStops.length + 1;
+          
+          let instruction = `乘坐${lineName}`;
+          if (trip) {
+            instruction += `(${trip})`;
+          }
+          instruction += `，从${departureStop}到${arrivalStop}`;
+          if (stopsCount > 1) {
+            instruction += `（${stopsCount}站）`;
+          }
+          if (viaStops.length > 0) {
+            const viaStopNames = viaStops.filter(stop => stop && stop.name).map(stop => stop.name).join('、');
+            instruction += `，途经：${viaStopNames}`;
+          }
+
+          processedSteps.push({
+            type: 'railway',
+            instruction: instruction,
+            line_name: lineName,
+            trip: trip,
+            departure_stop: departureStop,
+            arrival_stop: arrivalStop,
+            via_stops: viaStops,
+            distance: railway.distance || 0,
+            duration: railway.duration || 0
+          });
+        }
+
+        // 出租车段
+        if (segment.taxi) {
+          const distance = segment.taxi.distance || 0;
+          const duration = segment.taxi.duration || 0;
+          processedSteps.push({
+            type: 'taxi',
+            instruction: `乘坐出租车${distance > 0 ? `，约${(distance / 1000).toFixed(2)}公里` : ''}${duration > 0 ? `，约${Math.round(duration / 60)}分钟` : ''}`,
+            distance: distance,
+            duration: duration
+          });
+        }
+      });
+
+      return [{
+        from_name: '起点',
+        to_name: '终点',
+        mode: 'public_transit',
+        steps: processedSteps,
+        distance: segments.reduce((total, seg) => total + (seg.distance || 0), 0),
+        duration: segments.reduce((total, seg) => total + (seg.duration || 0), 0)
+      }];
+    },
+
+    // 解析路线数据中的交通方式类型
+    parseTransitSegmentType(segment) {
+      if (!segment) return 'unknown';
+      
+      if (segment.walking || segment.type === 'walking') return 'walking';
+      if (segment.bus || segment.type === 'bus') return 'bus';
+      if (segment.railway || segment.subway || segment.type === 'railway' || segment.type === 'subway') return 'subway';
+      if (segment.taxi || segment.type === 'taxi') return 'taxi';
+      
+      return 'other';
+    },
+
+    // 提取并格式化公交车次信息
+    formatBusLineInfo(line) {
+      if (!line) return {};
+      
+      return {
+        number: this.extractBusNumber(line.name),
+        fullName: line.name,
+        departure: line.departure_stop ? line.departure_stop.name : '未知站点',
+        arrival: line.arrival_stop ? line.arrival_stop.name : '未知站点',
+        stopsCount: this.calculateStopsCount(line),
+        viaStops: line.via_stops || []
+      };
+    },
+
+    // 提取并格式化地铁线路信息
+    formatSubwayLineInfo(railway) {
+      if (!railway) return {};
+      
+      return {
+        lineName: this.extractSubwayLine(railway.name),
+        trainNumber: railway.trip || '',
+        departure: railway.departure_stop ? railway.departure_stop.name : '未知站点',
+        arrival: railway.arrival_stop ? railway.arrival_stop.name : '未知站点',
+        stopsCount: this.calculateSubwayStops(railway),
+        viaStops: railway.via_stops || []
+      };
     }
   },
   
@@ -3689,6 +4347,43 @@ button[type="submit"]:hover {
   margin-top: 15px !important;
   padding-top: 15px;
   border-top: 1px solid #e9ecef;
+}
+
+/* 路线摘要网格样式 */
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.summary-item {
+  background: #fff;
+  padding: 15px;
+  border-radius: 12px;
+  text-align: center;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+  transition: all 0.3s ease;
+}
+
+.summary-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
+
+.summary-label {
+  font-size: 0.85rem;
+  color: #6c757d;
+  margin-bottom: 8px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.summary-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #2c3e50;
 }
 
 /* 退出登录按钮 */
@@ -4499,6 +5194,29 @@ button[type="submit"]:hover {
   }
 }
 
+/* 驾车路线详细显示样式 */
+.driving-route-details {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 15px;
+}
+
+.driving-route-details .route-segment {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  border-left: 4px solid #28a745;
+  transition: all 0.3s ease;
+}
+
+.driving-route-details .route-segment:hover {
+  background: #fff;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+  transform: translateX(5px);
+}
+
 /* 路线顺序样式 */
 .route-order {
   background: #fff;
@@ -4642,6 +5360,349 @@ button[type="submit"]:hover {
   font-weight: normal;
 }
 
+/* 公交路线详细显示样式 */
+.transit-route-details {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 15px;
+}
+
+.transit-segment {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  border-left: 4px solid #667eea;
+  transition: all 0.3s ease;
+}
+
+.transit-segment:hover {
+  background: #fff;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+  transform: translateX(5px);
+}
+
+.segment-title {
+  font-weight: 600;
+  color: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.1rem;
+}
+
+.segment-content {
+  margin-top: 15px;
+}
+
+.segment-stats {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 15px;
+  padding: 10px 15px;
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: 8px;
+}
+
+.stat-time, .stat-distance, .stat-cost {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #495057;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 步行指导样式 */
+.walking-instructions {
+  background: linear-gradient(135deg, #e8f5e8 0%, #f1f8e9 100%);
+  border-radius: 10px;
+  padding: 15px;
+  border-left: 4px solid #28a745;
+}
+
+.instruction-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-weight: 600;
+  color: #28a745;
+  font-size: 1rem;
+}
+
+.instruction-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.instruction-step {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+}
+
+.step-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.step-icon {
+  color: #28a745;
+  font-weight: bold;
+}
+
+.step-text {
+  color: #495057;
+  line-height: 1.4;
+}
+
+.step-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: #6c757d;
+  margin-left: 10px;
+}
+
+.step-distance, .step-duration {
+  background: #28a745;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+}
+
+/* 公交指导样式 */
+.bus-instructions {
+  background: linear-gradient(135deg, #e3f2fd 0%, #f0f9ff 100%);
+  border-radius: 10px;
+  padding: 15px;
+  border-left: 4px solid #2196f3;
+}
+
+.bus-instructions .instruction-header {
+  color: #1976d2;
+}
+
+.bus-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bus-line {
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  padding: 15px;
+  border: 1px solid rgba(33, 150, 243, 0.2);
+}
+
+.line-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.line-number {
+  background: #2196f3;
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.line-name {
+  color: #1976d2;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.line-route {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 10px;
+}
+
+.station-info {
+  flex: 1;
+  text-align: center;
+}
+
+.station-label {
+  display: block;
+  font-size: 0.8rem;
+  color: #6c757d;
+  margin-bottom: 4px;
+}
+
+.station-name {
+  font-weight: 600;
+  color: #2c3e50;
+  font-size: 0.95rem;
+  background: rgba(255, 255, 255, 0.8);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(33, 150, 243, 0.3);
+}
+
+.route-arrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1976d2;
+  font-weight: 600;
+  padding: 8px 12px;
+  background: rgba(33, 150, 243, 0.1);
+  border-radius: 20px;
+  font-size: 0.9rem;
+}
+
+.stops-count {
+  color: #1976d2;
+  font-weight: bold;
+}
+
+.via-stops {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: rgba(33, 150, 243, 0.05);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.via-label {
+  color: #6c757d;
+  font-weight: 500;
+}
+
+.via-stations {
+  color: #495057;
+  margin-left: 8px;
+}
+
+/* 地铁指导样式 */
+.subway-instructions {
+  background: linear-gradient(135deg, #fff3e0 0%, #fef9c3 100%);
+  border-radius: 10px;
+  padding: 15px;
+  border-left: 4px solid #ff9800;
+}
+
+.subway-instructions .instruction-header {
+  color: #f57c00;
+}
+
+.subway-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.subway-line {
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  padding: 15px;
+  border: 1px solid rgba(255, 152, 0, 0.2);
+}
+
+.subway-line-number {
+  background: #ff9800;
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.train-number {
+  background: #f57c00;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  margin-left: 8px;
+}
+
+.subway-instructions .route-arrow {
+  background: rgba(255, 152, 0, 0.1);
+  color: #f57c00;
+}
+
+.subway-instructions .stops-count {
+  color: #f57c00;
+}
+
+.subway-instructions .station-name {
+  border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
+.subway-instructions .via-stops {
+  background: rgba(255, 152, 0, 0.05);
+}
+
+/* 其他交通方式样式 */
+.other-instructions {
+  background: linear-gradient(135deg, #f3e5f5 0%, #fce4ec 100%);
+  border-radius: 10px;
+  padding: 15px;
+  border-left: 4px solid #9c27b0;
+}
+
+.other-instructions .instruction-header {
+  color: #7b1fa2;
+}
+
+/* 简单指导样式 */
+.simple-instruction {
+  color: #495057;
+  font-style: italic;
+  padding: 10px 15px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+  text-align: center;
+}
+
+/* 响应式优化 */
+@media (max-width: 768px) {
+  .line-route {
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .route-arrow {
+    order: 2;
+  }
+  
+  .station-info.departure {
+    order: 1;
+  }
+  
+  .station-info.arrival {
+    order: 3;
+  }
+  
+  .segment-stats {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .transit-segment {
+    padding: 15px;
+  }
+}
+
 /* 通知组件样式 */
 .notification-container {
   position: fixed;
@@ -4780,6 +5841,39 @@ button[type="submit"]:hover {
   .notification-message {
     font-size: 13px;
   }
+}
+
+/* 加载指示器样式 */
+.loading-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  background: #f8f9fa;
+  border-radius: 12px;
+  margin-top: 20px;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e9ecef;
+  border-top: 4px solid #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 15px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-indicator p {
+  color: #6c757d;
+  margin: 0;
+  font-weight: 500;
 }
 
 h2 { color: #333; text-align: center; }

@@ -294,36 +294,9 @@
         </div>
       </div>
 
-      <!-- NEW: Route Candidates for A-to-B -->
-      <div v-if="isCalculatingRoute && routeCandidates.length === 0" class="loading-routes-indicator">
+      <!-- Loading indicator -->
+      <div v-if="isCalculatingRoute" class="loading-routes-indicator">
         <p>正在为您寻找最佳路线，请稍候...</p>
-      </div>
-      <div v-if="routeCandidates.length > 0" class="route-candidates-container">
-        <h3>请选择一条路线方案</h3>
-        <ul class="route-candidates-list">
-          <li 
-            v-for="(route, index) in routeCandidates" 
-            :key="route.id" 
-            class="route-candidate-item"
-            :class="{ selected: selectedRouteId === route.id }"
-            @click="selectRouteCandidate(route.id)"
-          >
-            <div class="candidate-item-header">
-              <span class="candidate-rank">方案 #{{ index + 1 }}</span>
-              <strong class="candidate-summary">{{ route.summary }}</strong>
-            </div>
-            <div class="candidate-item-stats">
-              <div class="stat-primary">
-                <span class="stat-icon">⏱️</span>
-                <span class="stat-value">{{ Math.round(route.duration / 60) }}</span> 分钟
-              </div>
-              <div class="stat-secondary">
-                <span class="stat-icon">📏</span>
-                <span class="stat-value">{{ (route.distance / 1000).toFixed(2) }}</span> 公里
-              </div>
-            </div>
-          </li>
-        </ul>
       </div>
 
     </div>
@@ -358,6 +331,143 @@
           </div>
         </li>
       </ul>
+    </div>
+
+    <!-- 详细路线指导显示 - 优化版 -->
+    <div v-if="selectedRoute && (selectedRoute.route_segments || selectedRoute.steps)" class="route-guidance-section">
+      <h3>📍 详细路线指导</h3>
+      
+      <!-- 路线概览信息 -->
+      <div class="route-overview">
+        <div class="overview-stats">
+          <div class="stat-item">
+            <span class="stat-icon">⏱️</span>
+            <span class="stat-label">总用时</span>
+            <span class="stat-value">{{ Math.round((selectedRoute.total_overall_duration || selectedRoute.duration || 0) / 60) }}分钟</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-icon">📏</span>
+            <span class="stat-label">总距离</span>
+            <span class="stat-value">{{ ((selectedRoute.total_distance || selectedRoute.distance || 0) / 1000).toFixed(2) }}公里</span>
+          </div>
+          <div v-if="selectedRoute.cost" class="stat-item">
+            <span class="stat-icon">💰</span>
+            <span class="stat-label">预估费用</span>
+            <span class="stat-value">{{ selectedRoute.cost }}元</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 多段路线的详细指导 -->
+      <div v-if="selectedRoute.route_segments" class="route-segments">
+        <div v-for="(segment, segmentIndex) in selectedRoute.route_segments" :key="segmentIndex" class="route-segment">
+          <div class="segment-header">
+            <div class="segment-title">
+              <span class="segment-number">{{ segmentIndex + 1 }}</span>
+              <h4>{{ segment.from_name }} → {{ segment.to_name }}</h4>
+              <span v-if="segment.mode" class="segment-mode" :class="segment.mode">
+                {{ segment.mode === 'public_transit' ? '🚌 公交' : '🚗 驾车' }}
+              </span>
+            </div>
+            <div class="segment-meta">
+              <span class="segment-distance">{{ (segment.distance / 1000).toFixed(2) }}公里</span>
+              <span class="segment-duration">{{ Math.round(segment.duration / 60) }}分钟</span>
+            </div>
+          </div>
+          
+          <!-- 公交详细步骤 -->
+          <div v-if="segment.mode === 'public_transit' && segment.steps && segment.steps.length > 0" class="transit-steps">
+            <div v-for="(step, stepIndex) in segment.steps" :key="stepIndex" class="transit-step" :class="step.type">
+              <div class="step-number">{{ stepIndex + 1 }}</div>
+              <div class="step-icon">
+                <span v-if="step.type === 'walk'">🚶‍♂️</span>
+                <span v-else-if="step.type === 'bus'">🚌</span>
+                <span v-else-if="step.type === 'railway'">🚇</span>
+                <span v-else-if="step.type === 'taxi'">🚕</span>
+                <span v-else-if="step.type === 'fallback'">⚠️</span>
+                <span v-else-if="step.type === 'unavailable'">❌</span>
+                <span v-else>🔄</span>
+              </div>
+              <div class="step-content">
+                <p class="step-instruction">{{ step.instruction }}</p>
+                <div v-if="step.duration || step.distance" class="step-meta">
+                  <span v-if="step.duration" class="step-duration">{{ Math.round(step.duration / 60) }}分钟</span>
+                  <span v-if="step.distance" class="step-distance">{{ step.distance }}米</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 驾车备选路线提示 -->
+          <div v-else-if="segment.mode === 'driving_fallback'" class="fallback-steps">
+            <div class="fallback-notice">
+              <div class="notice-icon">⚠️</div>
+              <div class="notice-content">
+                <p class="notice-title">公交路线不可达</p>
+                <p class="notice-text">未找到可用的公交路线，以下为驾车路线作为参考：</p>
+              </div>
+            </div>
+            <div v-for="(step, stepIndex) in segment.steps" :key="stepIndex" class="driving-step fallback-step">
+              <div class="step-number">{{ stepIndex + 1 }}</div>
+              <div class="step-icon">🚗</div>
+              <div class="step-content">
+                <p class="step-instruction">{{ step.instruction || step.action }}</p>
+                <div v-if="step.distance || step.duration" class="step-meta">
+                  <span v-if="step.distance" class="step-distance">{{ step.distance }}米</span>
+                  <span v-if="step.duration" class="step-duration">{{ Math.round(step.duration) }}秒</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 驾车详细步骤 -->
+          <div v-else-if="segment.mode === 'driving' && segment.steps && segment.steps.length > 0" class="driving-steps">
+            <div v-for="(step, stepIndex) in segment.steps" :key="stepIndex" class="driving-step">
+              <div class="step-number">{{ stepIndex + 1 }}</div>
+              <div class="step-icon">🚗</div>
+              <div class="step-content">
+                <p class="step-instruction">{{ step.instruction || step.action }}</p>
+                <div v-if="step.distance || step.duration" class="step-meta">
+                  <span v-if="step.distance" class="step-distance">{{ step.distance }}米</span>
+                  <span v-if="step.duration" class="step-duration">{{ Math.round(step.duration) }}秒</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 如果没有详细步骤，显示基本信息 -->
+          <div v-else class="basic-segment-info">
+            <div class="basic-info-content">
+              <p class="route-description">从 <strong>{{ segment.from_name }}</strong> 到 <strong>{{ segment.to_name }}</strong></p>
+              <div class="basic-stats">
+                <span class="basic-stat">📏 {{ (segment.distance / 1000).toFixed(2) }}公里</span>
+                <span class="basic-stat">⏱️ {{ Math.round(segment.duration / 60) }}分钟</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 单段路线的详细指导 -->
+      <div v-else-if="selectedRoute.steps" class="route-steps">
+        <div v-for="(step, stepIndex) in selectedRoute.steps" :key="stepIndex" class="route-step" :class="step.type">
+          <div class="step-number">{{ stepIndex + 1 }}</div>
+          <div class="step-icon">
+            <span v-if="step.type === 'walk'">🚶‍♂️</span>
+            <span v-else-if="step.type === 'bus'">🚌</span>
+            <span v-else-if="step.type === 'railway'">🚇</span>
+            <span v-else-if="step.type === 'taxi'">🚕</span>
+            <span v-else>🔄</span>
+          </div>
+          <div class="step-content">
+            <p class="step-instruction">{{ step.instruction }}</p>
+            <div v-if="step.duration || step.distance" class="step-meta">
+              <span v-if="step.duration" class="step-duration">{{ Math.round(step.duration / 60) }}分钟</span>
+              <span v-if="step.distance" class="step-distance">{{ step.distance }}米</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <hr class="separator"/>
@@ -428,8 +538,6 @@ export default {
       displayableSchedule: null,  // The schedule for the selected route
       
       showMap: false,
-      routeCandidates: [],        // NEW: For A-to-B route options
-      isFetchingDetails: false,   // NEW: For fetching details of a selected candidate
     };
   },
   computed: {
@@ -645,24 +753,29 @@ export default {
       
       this.isCalculatingRoute = true;
 
-      // New logic for A-to-B routing (single destination)
+      // 修复：即使是单个店铺，也使用route/optimize接口来规划完整的往返路线
       if (confirmedShops.length === 1) {
         try {
           const destination = confirmedShops[0];
+          // 使用optimize接口确保获得完整的往返路线（家->店铺->家）
           const payload = {
-            origin: {
+            home_location: {
               latitude: this.currentHomeLocation.latitude,
               longitude: this.currentHomeLocation.longitude,
             },
-            destination: {
+            shops: [{
+              id: destination.id,
+              name: destination.name,
               latitude: destination.latitude,
               longitude: destination.longitude,
-            },
+              stay_duration: (destination.stayDurationMinutes || 30) * 60, // Convert to seconds
+            }],
             mode: this.selectedTravelMode,
-            city: this.homeCityName,
+            city: this.selectedTravelMode === 'public_transit' ? this.homeCityName : undefined,
+            top_n: 5, // Request top 5 for both time and distance
           };
 
-          const response = await fetch('http://localhost:5000/api/route/directions', {
+          const response = await fetch('http://localhost:5000/api/route/optimize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -670,14 +783,31 @@ export default {
 
           if (!response.ok) {
             const errorData = await response.json();
-            throw new Error(errorData.message || 'Failed to fetch route candidates.');
+            throw new Error(errorData.message || 'Failed to calculate optimized route.');
           }
 
-          const candidates = await response.json();
-          if (candidates.length === 0) {
-            alert('未能找到符合条件的路线。');
+          const result = await response.json();
+          
+          // 处理返回的数据结构
+          if (result.route_candidates && result.route_candidates.length > 0) {
+            this.processRouteResults(result.route_candidates);
+          } else if (result.routes && (result.routes.fastest_travel_time_routes || result.routes.shortest_distance_routes)) {
+            // 兼容旧的数据结构
+            this.routesByTime = this.processRoutes(result.routes.fastest_travel_time_routes || []);
+            this.routesByDistance = this.processRoutes(result.routes.shortest_distance_routes || []);
+          } else {
+            throw new Error('未收到有效的路线数据');
           }
-          this.routeCandidates = candidates;
+          
+          const totalRoutes = this.routesByTime.length + this.routesByDistance.length;
+          this.showNotification(`🎉 成功获取 ${totalRoutes} 条往返路线! 请从下方列表中选择一条路线`, 'success');
+          
+          // 自动选择第一条路线
+          if (this.routesByTime.length > 0) {
+            this.selectRoute(this.routesByTime[0]);
+          } else if (this.routesByDistance.length > 0) {
+            this.selectRoute(this.routesByDistance[0]);
+          }
 
         } catch (error) {
           console.error('Error getting directions:', error);
@@ -690,29 +820,7 @@ export default {
         this.optimizeRoute();
       }
     },
-    async selectRouteCandidate(routeId) {
-      if (this.isFetchingDetails) return;
-      this.isFetchingDetails = true;
-      this.selectedRoute = null;
 
-      try {
-        const response = await fetch(`http://localhost:5000/api/route/directions/${routeId}`);
-        if (!response.ok) {
-          throw new Error('Failed to fetch route details.');
-        }
-        this.selectedRoute = await response.json();
-        this.selectedRouteId = routeId;
-        
-        // Hide the candidates list after selection to show the map and details
-        // this.routeCandidates = []; 
-      } catch (error) {
-        console.error('Error selecting route candidate:', error);
-        alert('Could not load route details. Please try again.');
-        this.selectedRouteId = null;
-      } finally {
-        this.isFetchingDetails = false;
-      }
-    },
     async optimizeRoute() {
       // This method now contains the original logic for multi-stop optimization
       if (!this.canCalculateRoute || this.isCalculatingRoute) return;
@@ -755,13 +863,22 @@ export default {
         }
 
         const result = await response.json();
-        this.routesByTime = this.processRoutes(result.routes.fastest_travel_time_routes);
-        this.routesByDistance = this.processRoutes(result.routes.shortest_distance_routes);
+        
+        // 修复：处理后端返回的route_candidates数据结构
+        if (result.route_candidates && result.route_candidates.length > 0) {
+          this.processRouteResults(result.route_candidates);
+        } else if (result.routes && (result.routes.fastest_travel_time_routes || result.routes.shortest_distance_routes)) {
+          // 兼容旧的数据结构
+          this.routesByTime = this.processRoutes(result.routes.fastest_travel_time_routes || []);
+          this.routesByDistance = this.processRoutes(result.routes.shortest_distance_routes || []);
+        } else {
+          throw new Error('未收到有效的路线数据');
+        }
+        
         // 不自动选择路线，让用户从候选列表中选择
         this.selectedRoute = null;
         this.selectedRouteId = null;
         this.displayableSchedule = null;
-        this.showRouteInfo = false;
       
         const totalRoutes = this.routesByTime.length + this.routesByDistance.length;
         this.showNotification(`🎉 成功获取 ${totalRoutes} 条候选路线! 请从下方列表中选择一条路线`, 'success');
@@ -789,9 +906,91 @@ export default {
         return route; // Return the original object if no processing is needed
       });
     },
+    // 处理路线结果 - 从main.js移植的正确逻辑
+    processRouteResults(routesData) {
+      if (!routesData || routesData.length === 0) {
+        this.showNotification('未能计算出有效路线', 'warning');
+        return;
+      }
+
+      const allRoutes = routesData;
+      console.log('🔍 收到的路线数据:', allRoutes);
+
+      // 按时间从短到长排序，取前5个
+      const timeRoutes = [...allRoutes]
+        .sort((a, b) => a.total_overall_duration - b.total_overall_duration)
+        .slice(0, 5);
+
+      // 按距离从短到长排序，取前5个  
+      const distanceRoutes = [...allRoutes]
+        .sort((a, b) => a.total_distance - b.total_distance)
+        .slice(0, 5);
+
+      console.log('⏱️ 按时间排序的路线:', timeRoutes);
+      console.log('📍 按距离排序的路线:', distanceRoutes);
+      
+      // 转换路线数据格式
+      const formatRoute = (route, index, type) => ({
+        id: `route_${type}_${index}`,
+        type: type,
+        optimizationType: type === 'time' ? '时间最短' : '距离最短',
+        rank: index + 1,
+        ...route, // 保留原始路线数据
+        combination: route.optimized_order || [],
+        totalTime: Math.round(route.total_overall_duration),
+        totalDistance: Math.round(route.total_distance),
+        routeData: route,
+        originalIndex: index
+      });
+      
+      // 设置路线数组
+      this.routesByTime = timeRoutes.map((route, index) => formatRoute(route, index, 'time'));
+      this.routesByDistance = distanceRoutes.map((route, index) => formatRoute(route, index, 'distance'));
+      
+      console.log('🚗 最终生成的时间路线:', this.routesByTime);
+      console.log('🚗 最终生成的距离路线:', this.routesByDistance);
+      
+      if (this.routesByTime.length === 0 && this.routesByDistance.length === 0) {
+        this.showNotification('未能计算出有效路线', 'warning');
+        return;
+      }
+      
+      this.showNotification(`🎉 成功获取候选路线! 时间优化(${this.routesByTime.length}条), 距离优化(${this.routesByDistance.length}条)`, 'success');
+    },
+    // 显示通知方法
+    showNotification(message, type = 'info', title = '') {
+      // 这里可以使用简单的alert或者集成更复杂的通知组件
+      if (type === 'success') {
+        console.log('✅', title || '成功', message);
+      } else if (type === 'error') {
+        console.error('❌', title || '错误', message);
+      } else if (type === 'warning') {
+        console.warn('⚠️', title || '警告', message);
+      } else {
+        console.info('ℹ️', title || '提示', message);
+      }
+      // 可以在这里添加更复杂的通知UI逻辑
+    },
     selectRoute(route) {
+      console.log('选择路线:', route);
       this.selectedRoute = route;
-      this.selectedRouteId = route.id; // Assuming route object has a unique 'id'
+      this.selectedRouteId = route.id;
+      
+      // 生成可显示的行程
+      if (route.optimized_order && route.route_segments) {
+        this.displayableSchedule = this.generateDisplaySchedule(route);
+      }
+      
+      // 在地图上显示路线
+      this.displayRouteOnMap(route);
+      
+      // 滚动到路线详情区域
+      this.$nextTick(() => {
+        const routeGuidanceSection = document.querySelector('.route-guidance-section');
+        if (routeGuidanceSection) {
+          routeGuidanceSection.scrollIntoView({ behavior: 'smooth' });
+        }
+      });
     },
     generateDisplaySchedule(routeData) {
       if (!routeData || !routeData.optimized_order || !routeData.route_segments) return [];
@@ -1820,5 +2019,392 @@ input[type="text"] {
 .candidate-shops,
 .candidate-item-tags {
   display: none !important;
+}
+
+/* 路线指导样式 */
+.route-guidance-section {
+  margin-top: 25px;
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 12px;
+  border: 1px solid #e9ecef;
+}
+
+.route-guidance-section h3 {
+  margin: 0 0 20px 0;
+  color: #2c3e50;
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.route-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.route-segment {
+  background: #fff;
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  border: 1px solid #e9ecef;
+}
+
+.segment-header {
+  margin-bottom: 15px;
+  border-bottom: 1px solid #e9ecef;
+  padding-bottom: 12px;
+}
+
+.segment-header h4 {
+  margin: 0 0 8px 0;
+  color: #2c3e50;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.segment-meta {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.segment-distance,
+.segment-duration {
+  background: #e3f2fd;
+  color: #1976d2;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.segment-mode {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.segment-mode.public_transit {
+  background: #e8f5e8;
+  color: #2e7d32;
+}
+
+.segment-mode.driving {
+  background: #fff3e0;
+  color: #f57c00;
+}
+
+.transit-steps,
+.driving-steps,
+.route-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.transit-step,
+.driving-step,
+.route-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border-left: 4px solid transparent;
+}
+
+.transit-step.walk,
+.route-step.walk {
+  border-left-color: #6c757d;
+  background: #f1f3f4;
+}
+
+.transit-step.bus,
+.route-step.bus {
+  border-left-color: #28a745;
+  background: #e8f5e8;
+}
+
+.transit-step.railway,
+.route-step.railway {
+  border-left-color: #007bff;
+  background: #e3f2fd;
+}
+
+.transit-step.taxi,
+.route-step.taxi {
+  border-left-color: #ffc107;
+  background: #fff8e1;
+}
+
+.driving-step {
+  border-left-color: #f57c00;
+  background: #fff3e0;
+}
+
+.step-icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+}
+
+.step-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-instruction {
+  margin: 0 0 6px 0;
+  color: #2c3e50;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.step-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 0.8rem;
+  color: #6c757d;
+}
+
+.step-distance,
+.step-duration {
+  background: #e9ecef;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.basic-segment-info {
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  color: #6c757d;
+  font-style: italic;
+}
+
+.basic-segment-info p {
+  margin: 0 0 8px 0;
+}
+
+.basic-segment-info p:last-child {
+  margin: 0;
+}
+
+/* 新增：路线概览样式 */
+.route-overview {
+  margin-bottom: 25px;
+  padding: 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  color: white;
+}
+
+.overview-stats {
+  display: flex;
+  justify-content: space-around;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 120px;
+}
+
+.stat-item .stat-icon {
+  font-size: 1.5rem;
+}
+
+.stat-item .stat-label {
+  font-size: 0.9rem;
+  opacity: 0.9;
+  text-align: center;
+}
+
+.stat-item .stat-value {
+  font-size: 1.2rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* 新增：段落标题优化 */
+.segment-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.segment-number {
+  background: #667eea;
+  color: white;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* 新增：步骤编号样式 */
+.step-number {
+  background: #e9ecef;
+  color: #495057;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* 优化：基础段落信息样式 */
+.basic-info-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.route-description {
+  margin: 0;
+  font-size: 1rem;
+  color: #2c3e50;
+  font-weight: 500;
+}
+
+.basic-stats {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.basic-stat {
+  background: #e3f2fd;
+  color: #1976d2;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+/* 新增：备选路线和警告样式 */
+.fallback-steps {
+  background: #fff8e1;
+  border: 1px solid #ffcc02;
+  border-radius: 8px;
+  padding: 15px;
+  margin-top: 10px;
+}
+
+.fallback-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 15px;
+  padding: 12px;
+  background: #fff3e0;
+  border-radius: 6px;
+  border-left: 4px solid #ff9800;
+}
+
+.notice-icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.notice-content {
+  flex: 1;
+}
+
+.notice-title {
+  margin: 0 0 4px 0;
+  font-weight: 600;
+  color: #f57c00;
+  font-size: 0.9rem;
+}
+
+.notice-text {
+  margin: 0;
+  color: #ef6c00;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.fallback-step {
+  background: #fff3e0 !important;
+  border-left-color: #ff9800 !important;
+}
+
+.transit-step.fallback,
+.transit-step.unavailable {
+  background: #ffebee;
+  border-left-color: #f44336;
+}
+
+.transit-step.unavailable .step-instruction {
+  color: #d32f2f;
+  font-weight: 500;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .route-guidance-section {
+    padding: 15px;
+  }
+  
+  .route-overview {
+    padding: 15px;
+  }
+  
+  .overview-stats {
+    gap: 15px;
+  }
+  
+  .stat-item {
+    min-width: 100px;
+  }
+  
+  .segment-title {
+    gap: 8px;
+  }
+  
+  .segment-meta {
+    gap: 10px;
+  }
+  
+  .transit-step,
+  .driving-step,
+  .route-step {
+    gap: 10px;
+    padding: 10px;
+  }
+  
+  .step-meta {
+    flex-direction: column;
+    gap: 6px;
+  }
+  
+  .basic-stats {
+    gap: 10px;
+  }
 }
 </style>
