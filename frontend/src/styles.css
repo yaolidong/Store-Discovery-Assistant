@@ -1092,4 +1092,100 @@ button[type="submit"]:hover {
   background: linear-gradient(135deg, #5a6268 0%, #343a40 100%);
   transform: translateY(-2px);
   box-shadow: 0 4px 15px rgba(108, 117, 125, 0.3);
-} 
+}
+
+/* 连锁店铺标记增强样式 */
+.badge.chain {
+  background-color: #e3f2fd;
+  color: #1976d2;
+  border: 1px solid #bbdefb;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge.optimization {
+  background-color: #fff3e0;
+  color: #f57c00;
+  border: 1px solid #ffcc02;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* 连锁店铺特殊标识 */
+.suggestion-item[data-type="chain"] {
+  background: linear-gradient(90deg, rgba(25, 118, 210, 0.05) 0%, rgba(25, 118, 210, 0.02) 100%);
+  border-left: 3px solid #1976d2;
+}
+
+.suggestion-item[data-type="chain"]:hover {
+  background: linear-gradient(90deg, rgba(25, 118, 210, 0.1) 0%, rgba(25, 118, 210, 0.05) 100%);
+}
+
+/* 连锁店铺名称样式 */
+.suggestion-item .suggestion-name strong {
+  color: #1976d2;
+  font-weight: 600;
+}
+
+/* 改进店铺建议下拉框样式 */
+.shop-suggestions {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  margin-top: 4px;
+  z-index: 1000;
+  position: absolute;
+  width: 100%;
+}
+
+/* 建议项增强样式 */
+.suggestion-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  position: relative;
+}
+
+.suggestion-item:hover {
+  background-color: #f8f9fa;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.suggestion-name {
+  font-weight: 500;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #2c3e50;
+}
+
+.suggestion-address {
+  color: #6c757d;
+  font-size: 13px;
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.suggestion-status {
+  color: #868e96;
+  font-size: 11px;
+  font-style: italic;
+  margin-top: 4px;
+}

@@ -97,6 +97,7 @@
             :key="suggestion.id"
             @mousedown="selectShopSuggestion(suggestion)"
             class="suggestion-item"
+            :data-type="suggestion.type"
           >
             <div v-if="suggestion.type === 'chain'">
               <div class="suggestion-name">
@@ -359,6 +360,8 @@ export default {
       shopsToVisit: [],
       shopSuggestions: [],
       showShopSuggestions: false,
+      shopSearchTimeout: null,
+      searchRequestCounter: 0, // <-- 搜索请求计数器作为取消令牌
       stayDurations: {},
       defaultStayDuration: 30,
       
@@ -374,11 +377,38 @@ export default {
       
       // 连锁店品牌列表
       chainStoreBrands: [
-        '肯德基', 'KFC', '麦当劳', "McDonald's", '星巴克', 'Starbucks',
-        '必胜客', 'Pizza Hut', '德克士', '华莱士', '正新鸡排',
-        '蜜雪冰城', '喜茶', '奈雪的茶', '茶百道', '古茗',
-        '瑞幸咖啡', 'Luckin Coffee', '7-Eleven', '全家', 'FamilyMart',
-        '便利蜂', '罗森', 'Lawson', '好利来', '面包新语'
+        // 快餐连锁
+        '肯德基', 'KFC', '麦当劳', "McDonald's", '汉堡王', 'Burger King',
+        '必胜客', 'Pizza Hut', '德克士', '华莱士', '正新鸡排', '第一佳大鸡排',
+        '老乡鸡', '真功夫', '永和大王', '吉野家', '食其家', '快乐蜂',
+        
+        // 咖啡茶饮
+        '星巴克', 'Starbucks', '瑞幸咖啡', 'Luckin Coffee', 'Costa',
+        '蜜雪冰城', '喜茶', '奈雪的茶', '茶百道', '古茗', '一点点',
+        '贡茶', 'Gong Cha', 'CoCo', '都可', '书亦烧仙草', '茶颜悦色',
+        
+        // 便利店
+        '7-Eleven', '全家', 'FamilyMart', '便利蜂', '罗森', 'Lawson',
+        '美宜佳', '十足', '苏宁小店', '天虹微喔',
+        
+        // 烘焙甜品
+        '好利来', '面包新语', '85度C', '巴黎贝甜', '原麦山丘',
+        '味多美', '多乐之日', '克莉丝汀', '仟吉',
+        
+        // 火锅烧烤
+        '海底捞', '呷哺呷哺', '小龙坎', '大龙燚', '德庄',
+        '丰茂烤串', '木屋烧烤', '很久以前', '金汉斯',
+        
+        // 中式餐饮
+        '外婆家', '绿茶', '云海肴', '西贝', '小南国',
+        '眉州东坡', '避风塘', '九毛九', '太二',
+        
+        // 日韩料理
+        '味千拉面', '一风堂', '豚王', '元气寿司', '争鲜',
+        '韩老大', '韩式汤饭', '本家韩式炸鸡',
+        
+        // 其他
+        '奶茶店', '便利店', '快餐店', '咖啡店', '茶饮店'
       ]
     }
   },
@@ -1343,22 +1373,69 @@ export default {
       }
     },
 
-    // 店铺输入处理
-    async onShopInput() {
-      if (!this.shopInput.trim() || !this.selectedCity) {
+    // 店铺输入处理 - 防抖调度器
+    onShopInput() {
+      clearTimeout(this.shopSearchTimeout);
+      this.shopSearchTimeout = setTimeout(() => {
+        this.performShopSearch();
+      }, 300); // 300ms延迟，等待用户输入完成
+    },
+
+    // 实际执行店铺搜索的方法
+    async performShopSearch() {
+      const currentSearchText = this.shopInput.trim();
+      this.searchRequestCounter++; // 增加计数器，为本次请求创建一个唯一的"令牌"
+      const currentRequestToken = this.searchRequestCounter;
+
+      if (!currentSearchText || !this.selectedCity) {
         this.shopSuggestions = [];
         return;
       }
 
+      // 1. 优先进行连锁店匹配
+      const chainMatchResult = this.getChainStoreMatch(currentSearchText);
+      if (chainMatchResult.isMatch) {
+        console.log(`[Token: ${currentRequestToken}] 匹配到连锁店:`, chainMatchResult.brandName);
+        // 即使是连锁店，也要检查令牌，确保没有被更新的输入覆盖
+        if (currentRequestToken === this.searchRequestCounter) {
+          this.shopSuggestions = [{
+            id: `chain_${chainMatchResult.brandName.toLowerCase().replace(/\s+/g, '_')}`,
+            name: chainMatchResult.brandName,
+            address: '连锁店铺 - 待组合优化时自动选择最优分店',
+            type: 'chain',
+            status: '系统将在路线规划时智能选择最优分店位置'
+          }];
+          this.showShopSuggestions = true;
+        } else {
+          console.log(`[Token: ${currentRequestToken}] 请求已过时，取消设置连锁店建议。`);
+        }
+        return; // 找到连锁店后，不再进行API搜索
+      }
+      
+      // 2. 如果不是连锁店，则进行API搜索
+      console.log(`[Token: ${currentRequestToken}] 未匹配到连锁店，执行API搜索:`, currentSearchText);
       try {
-        const response = await fetch(`/api/search-shops?query=${encodeURIComponent(this.shopInput)}&city=${encodeURIComponent(this.selectedCity)}`);
+        const response = await fetch(`/api/search-shops?query=${encodeURIComponent(currentSearchText)}&city=${encodeURIComponent(this.selectedCity)}`);
+        
+        // 关键：在处理结果前，检查当前请求是否仍然是最新的
+        if (currentRequestToken < this.searchRequestCounter) {
+          console.log(`[Token: ${currentRequestToken}] API请求返回，但已过时，丢弃结果。`);
+          return;
+        }
+
+        console.log(`[Token: ${currentRequestToken}] API请求成功，处理结果。`);
         if (response.ok) {
           const data = await response.json();
           this.shopSuggestions = data.suggestions || [];
+        } else {
+          this.shopSuggestions = [];
         }
       } catch (error) {
-        console.error('店铺搜索错误:', error);
-        this.shopSuggestions = [];
+        console.error(`[Token: ${currentRequestToken}] API搜索失败:`, error);
+        // 同样检查令牌
+        if (currentRequestToken === this.searchRequestCounter) {
+          this.shopSuggestions = [];
+        }
       }
     },
 
@@ -1372,10 +1449,7 @@ export default {
       // 检查是否已经添加过这个店铺
       const exists = this.shopsToVisit.some(shop => shop.id === suggestion.id);
       if (!exists) {
-        this.shopsToVisit.push({
-          ...suggestion,
-          type: this.isChainStore(suggestion.name) ? 'chain' : 'private'
-        });
+        this.shopsToVisit.push(suggestion); // 直接推送建议对象
         this.showNotification(`已添加店铺: ${suggestion.name}`, 'success');
       } else {
         this.showNotification('该店铺已在列表中', 'warning');
@@ -1398,12 +1472,48 @@ export default {
       }
     },
 
-    // 连锁店判断
+    // 连锁店匹配 - 增强版 (这是正确的版本)
+    getChainStoreMatch(shopName) {
+      const searchName = shopName.toLowerCase().trim();
+      
+      if (!searchName) {
+        return { isMatch: false, brandName: null, matchType: null };
+      }
+
+      for (const brand of this.chainStoreBrands) {
+        const brandLower = brand.toLowerCase();
+        
+        if (searchName === brandLower) {
+          return { isMatch: true, brandName: brand, matchType: 'exact' };
+        }
+        if (searchName.includes(brandLower) && brandLower.length >= 2) {
+          return { isMatch: true, brandName: brand, matchType: 'contains_brand' };
+        }
+        if (brandLower.includes(searchName) && searchName.length >= 2) {
+          return { isMatch: true, brandName: brand, matchType: 'brand_contains' };
+        }
+      }
+      
+      const fuzzyMatches = [
+        { input: 'kfc', brand: '肯德基' },
+        { input: 'mcdonald', brand: '麦当劳' },
+        { input: 'starbucks', brand: '星巴克' },
+        { input: 'pizzahut', brand: '必胜客' },
+      ];
+      
+      for (const fuzzy of fuzzyMatches) {
+        if (searchName.includes(fuzzy.input) || fuzzy.input.includes(searchName)) {
+          return { isMatch: true, brandName: fuzzy.brand, matchType: 'fuzzy' };
+        }
+      }
+      
+      return { isMatch: false, brandName: null, matchType: null };
+    },
+
+    // 保留isChainStore方法供其他地方使用
     isChainStore(shopName) {
-      return this.chainStoreBrands.some(brand => 
-        shopName.toLowerCase().includes(brand.toLowerCase()) ||
-        brand.toLowerCase().includes(shopName.toLowerCase())
-      );
+      const matchResult = this.getChainStoreMatch(shopName);
+      return matchResult.isMatch;
     },
 
     // 停留时间管理
@@ -1424,31 +1534,73 @@ export default {
       this.showRouteInfo = false;
       
       try {
+        const chainStores = this.shopsToVisit.filter(shop => shop.type === 'chain');
+        const privateStores = this.shopsToVisit.filter(shop => shop.type === 'private');
+
+        const chainCategories = {};
+        chainStores.forEach(shop => {
+          // 每个连锁品牌选择1家店，可以根据需求调整
+          chainCategories[shop.name] = 1;
+        });
+        
+        // 确保所有私人店铺都有标准的经纬度格式
+        const formattedPrivateShops = privateStores.map(shop => {
+          let latitude, longitude;
+          if (typeof shop.location === 'string' && shop.location.includes(',')) {
+            const parts = shop.location.split(',');
+            longitude = parseFloat(parts[0]);
+            latitude = parseFloat(parts[1]);
+          } else if (shop.latitude && shop.longitude) {
+            latitude = shop.latitude;
+            longitude = shop.longitude;
+          }
+          return {
+            id: shop.id,
+            name: shop.name,
+            address: shop.address,
+            latitude,
+            longitude,
+          };
+        });
+
+        // 构建统一的请求体
+        const requestData = {
+          homeLocation: this.homeLocation,
+          private_shops: formattedPrivateShops,
+          chain_categories: chainCategories,
+          travelMode: this.travelMode,
+          departureTime: this.departureTime,
+          stayDurations: this.stayDurations,
+          defaultStayDuration: this.defaultStayDuration,
+          city: this.selectedCity,
+        };
+        
+        console.log('发送给后端的路线规划数据:', JSON.stringify(requestData, null, 2));
+
         const response = await fetch('/api/optimize-route', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Credentials': 'include'
           },
-          body: JSON.stringify({
-            homeLocation: this.homeLocation,
-            shops: this.shopsToVisit,
-            travelMode: this.travelMode,
-            departureTime: this.departureTime,
-            stayDurations: this.stayDurations,
-            defaultStayDuration: this.defaultStayDuration,
-            city: this.selectedCity
-          })
+          body: JSON.stringify(requestData)
         });
 
         if (response.ok) {
           const result = await response.json();
           this.processRouteResults(result);
         } else {
+          const errorBody = await response.json().catch(() => ({ message: '无法解析错误信息' }));
+          console.error('路线规划请求失败:', response.status, errorBody);
+          this.showNotification(`路线规划失败: ${errorBody.message || '未知错误'}`, 'error');
           throw new Error('路线规划请求失败');
         }
       } catch (error) {
         console.error('路线规划错误:', error);
-        this.showNotification('路线规划失败，请重试', 'error');
+        // 避免重复通知
+        if (!error.message.includes('路线规划请求失败')) {
+          this.showNotification('路线规划时发生客户端错误', 'error');
+        }
       } finally {
         this.isLoading = false;
       }
@@ -1542,7 +1694,6 @@ export default {
         this.$refs.mapDisplayRef.map.setZoom(12);
       }
     },
-
 
   },
 

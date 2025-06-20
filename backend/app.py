@@ -55,7 +55,16 @@ app.config['AMAP_API_KEY'] = '68778fb7fc7baf898edd94a8fc683768' # Added Amap API
 # Initialize extensions
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
-login_manager.login_view = 'login' # Redirect to login page if user is not authenticated
+
+@login_manager.unauthorized_handler
+def unauthorized_handler():
+    """自定义未授权处理，API请求返回JSON，非API请求可以重定向（如果需要）"""
+    # 检查请求路径是否以/api/开头
+    if request.path.startswith('/api/'):
+        return jsonify({'message': 'Authorization required. Please log in.'}), 401
+    # 对于非API请求，可以保留重定向到登录页的行为
+    # 这里我们假设所有需要登录的都是API，所以直接返回401
+    return jsonify({'message': 'Authorization required.'}), 401
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
