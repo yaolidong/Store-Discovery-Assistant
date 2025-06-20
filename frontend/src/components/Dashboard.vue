@@ -487,15 +487,29 @@ export default {
       try {
         const response = await fetch('/api/logout', {
           method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
           credentials: 'include'
         });
         
         if (response.ok) {
-          window.location.href = '/';
+          // 清除本地存储的用户凭证
+          localStorage.removeItem('userToken');
+          // 刷新页面以重置状态并触发路由守卫
+          window.location.reload();
+        } else {
+          // 如果会话已过期，也清除本地凭证
+          if (response.status === 401) {
+            localStorage.removeItem('userToken');
+            window.location.reload();
+          } else {
+            this.showNotification('登出失败，请重试', 'error');
+          }
         }
       } catch (error) {
         console.error('登出失败:', error);
-        this.showNotification('登出失败，请重试', 'error');
+        this.showNotification('登出时发生网络错误', 'error');
       }
     },
 
@@ -1565,13 +1579,13 @@ export default {
 
         // 构建统一的请求体
         const requestData = {
-          homeLocation: this.homeLocation,
+          home_location: this.homeLocation,
           private_shops: formattedPrivateShops,
           chain_categories: chainCategories,
-          travelMode: this.travelMode,
-          departureTime: this.departureTime,
-          stayDurations: this.stayDurations,
-          defaultStayDuration: this.defaultStayDuration,
+          mode: this.travelMode,
+          departure_time: this.departureTime,
+          stay_durations: this.stayDurations,
+          default_stay_duration: this.defaultStayDuration,
           city: this.selectedCity,
         };
         

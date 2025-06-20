@@ -562,6 +562,33 @@ class TSPWithCategoriesOptimizer:
         """精确优化算法（适用于小规模问题）- 改进版本，生成更多候选路线"""
         logger.info("使用精确算法进行TSP with Categories优化")
         
+        # 如果只有一个连锁店类别，且没有私人店铺，则简化为选择最优分店
+        if len(self.chain_categories) == 1 and not self.private_shops:
+            logger.info("检测到单个连锁店品牌，将直接评估每个分店")
+            
+            brand_name = list(self.chain_categories.keys())[0]
+            shop_indices = self.category_points[brand_name]
+            
+            all_candidates = []
+            for shop_idx in shop_indices:
+                # 路线是简单的 Home -> Shop -> Home
+                route_indices = [0, shop_idx, 0]
+                
+                # 计算总时间和距离（往返）
+                time_cost = cost_matrix[0][shop_idx]['duration'] + cost_matrix[shop_idx][0]['duration']
+                distance_cost = cost_matrix[0][shop_idx]['distance'] + cost_matrix[shop_idx][0]['distance']
+
+                all_candidates.append({
+                    'route_indices': route_indices,
+                    'selected_shops': [shop_idx],
+                    'total_time_cost': time_cost,
+                    'total_distance_cost': distance_cost,
+                    'optimization_type': 'selection',
+                    'combination_id': tuple(sorted([shop_idx]))
+                })
+                
+            return self._select_top_candidates(all_candidates)
+            
         # 生成所有有效的类别组合
         category_combinations = self._generate_category_combinations()
         
@@ -1020,110 +1047,96 @@ class TSPWithCategoriesOptimizer:
 
         
     def _format_result(self, selected_candidates, cost_matrix):
-        """格式化优化结果 - 支持多个候选路线"""
+        """格式化优化结果 - 生成与前端完全兼容的格式"""
         if not selected_candidates:
-            return self._create_fallback_result()
+            # 返回一个表示失败或无结果的兼容格式
+            return {
+                'success': False, 
+                'routes': [], 
+                'message': '未能找到合适的路线方案'
+            }
+
+        route_candidates_list = []
         
-        # 构建多个候选路线
-        route_candidates = []
-        
-        for rank, candidate in enumerate(selected_candidates, 1):
+        time_ranked_candidates = sorted(selected_candidates, key=lambda x: x.get('total_time_cost', float('inf')))
+        distance_ranked_candidates = sorted(selected_candidates, key=lambda x: x.get('total_distance_cost', float('inf')))
+
+        seen_routes = set()
+
+        def format_candidate(candidate, optimization_type, rank):
             route_indices = candidate['route_indices']
             
-            # 构建路线详情
-            route_details = []
-            total_distance = 0
-            total_duration = 0
+            if not route_indices or route_indices[0] != 0 or route_indices[-1] != 0:
+                logger.warning(f"跳过格式不正确的路线: {route_indices}")
+                return None
             
+            # 使用优化类型和路线组合作为唯一标识，允许同一店铺组合的不同优化类型
+            route_key = (optimization_type, tuple(route_indices[1:-1]))
+            if route_key in seen_routes:
+                return None
+            seen_routes.add(route_key)
+
+            shop_indices_in_route = route_indices[1:-1]
+            total_stay_duration = sum(self.all_points[shop_idx].get('stay_duration', 0) for shop_idx in shop_indices_in_route)
+
+            route_segments = []
             for i in range(len(route_indices) - 1):
-                from_idx = route_indices[i]
-                to_idx = route_indices[i + 1]
+                from_idx, to_idx = route_indices[i], route_indices[i+1]
+                segment_info = cost_matrix[from_idx][to_idx]
+                if not segment_info:
+                    logger.warning(f"缺少路段信息: {from_idx} -> {to_idx}")
+                    continue
                 
-                segment = cost_matrix[from_idx][to_idx]
-                if segment:
-                    route_details.append({
-                        'from': self.all_points[from_idx],
-                        'to': self.all_points[to_idx],
-                        'distance': segment.get('distance', 0),
-                        'duration': segment.get('duration', 0),
-                        'polyline': segment.get('polyline', ''),
-                        'steps': segment.get('steps', [])
-                    })
-                    total_distance += segment.get('distance', 0)
-                    total_duration += segment.get('duration', 0)
+                segment_data = {
+                    "from_name": self.all_points[from_idx].get("name", "Unknown"),
+                    "to_name": self.all_points[to_idx].get("name", "Unknown"),
+                    "from_id": self.all_points[from_idx].get("id", "unknown"),
+                    "to_id": self.all_points[to_idx].get("id", "unknown"),
+                    "distance": segment_info.get('distance', 0),
+                    "duration": segment_info.get('duration', 0),
+                    "polyline": segment_info.get('polyline', ''),
+                    "steps": segment_info.get('steps', []),
+                    "mode": 'public_transit' if 'segments' in segment_info else 'driving'
+                }
+                if 'segments' in segment_info:
+                    segment_data['transit_segments'] = segment_info['segments']
+                route_segments.append(segment_data)
+
+            total_travel_time = candidate['total_time_cost']
+            total_distance = candidate['total_distance_cost']
             
-            # 添加返回家的路径
-            if len(route_indices) > 1:
-                last_idx = route_indices[-1]
-                home_idx = 0
-                segment = cost_matrix[last_idx][home_idx]
-                if segment:
-                    route_details.append({
-                        'from': self.all_points[last_idx],
-                        'to': self.all_points[home_idx],
-                        'distance': segment.get('distance', 0),
-                        'duration': segment.get('duration', 0),
-                        'polyline': segment.get('polyline', ''),
-                        'steps': segment.get('steps', [])
-                    })
-                    total_distance += segment.get('distance', 0)
-                    total_duration += segment.get('duration', 0)
-            
-            # 构建选中的店铺信息
-            selected_chain_shops = []
-            for shop_idx in candidate['selected_shops']:
-                shop = self.all_points[shop_idx]
-                selected_chain_shops.append({
-                    'id': shop['id'],
-                    'name': shop['name'],
-                    'brand': shop.get('brand', ''),
-                    'latitude': shop['latitude'],
-                    'longitude': shop['longitude'],
-                    'address': shop.get('address', ''),
-                    'type': 'chain'
-                })
-            
-            # 构建候选路线数据
-            route_candidate = {
+            formatted_candidate_data = {
+                'id': hashlib.md5(str(route_indices).encode()).hexdigest(),
+                'type': optimization_type,
                 'rank': rank,
-                'optimization_priority': candidate.get('optimization_priority', 'time'),
-                'route_points': [self.all_points[i] for i in route_indices],
-                'route_details': route_details,
-                'selected_chain_shops': selected_chain_shops,
-                'private_shops': self.private_shops,
-                'total_distance': total_distance,
-                'total_duration': total_duration,
-                'total_time_cost': candidate['total_time_cost'],
-                'total_distance_cost': candidate['total_distance_cost'],
-                'strategy': candidate.get('strategy', 'unknown'),
+                'combination': [self.all_points[idx] for idx in route_indices[1:-1]],
+                'totalTime': total_travel_time,
+                'totalDistance': total_distance,
+                
+                'optimized_order': [self.all_points[idx] for idx in route_indices],
+                'total_stay_time': total_stay_duration,
+                'total_overall_duration': total_travel_time + total_stay_duration,
+                'route_segments': route_segments,
+                'is_optimized': True,
                 'shop_combination_summary': self._get_combination_summary(candidate['selected_shops'])
             }
-            
-            route_candidates.append(route_candidate)
+            return formatted_candidate_data
         
-        # 按时间和距离分别排序，生成分类的候选
-        time_ranked = sorted(route_candidates, key=lambda x: x.get('total_time_cost', float('inf')))
-        distance_ranked = sorted(route_candidates, key=lambda x: x.get('total_distance_cost', float('inf')))
+        for i, candidate in enumerate(time_ranked_candidates[:5]):
+            formatted = format_candidate(candidate, 'time', i + 1)
+            if formatted:
+                route_candidates_list.append(formatted)
         
+        for i, candidate in enumerate(distance_ranked_candidates[:5]):
+            if len(route_candidates_list) >= 10: break
+            formatted = format_candidate(candidate, 'distance', i + 1)
+            if formatted:
+                route_candidates_list.append(formatted)
+
         return {
             'success': True,
-            'total_candidates': len(route_candidates),
-            'route_candidates': {
-                'by_time': time_ranked,
-                'by_distance': distance_ranked,
-                'all': route_candidates
-            },
-            'optimization_method': 'TSP_with_Categories_Enhanced',
-            'summary': {
-                'fastest_route': {
-                    'duration': time_ranked[0]['total_duration'] if time_ranked else 0,
-                    'combination': time_ranked[0]['shop_combination_summary'] if time_ranked else {}
-                },
-                'shortest_route': {
-                    'distance': distance_ranked[0]['total_distance'] if distance_ranked else 0,
-                    'combination': distance_ranked[0]['shop_combination_summary'] if distance_ranked else {}
-                }
-            }
+            'routes': route_candidates_list,
+            'message': f"成功生成 {len(route_candidates_list)} 个优化路线候选"
         }
         
     def _get_combination_summary(self, selected_shops):
@@ -1754,7 +1767,7 @@ def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=N
     params = {
         "key": api_key,
         "keywords": keywords,
-        "offset": 20, # Number of results per page (max 25)
+        "offset": 25, # Number of results per page (max 25)
         "page": 1,
     }
     if city:
@@ -1773,7 +1786,7 @@ def search_poi(api_key, keywords, city=None, location=None, radius=5000, types=N
         # 处理和转换数据格式 - 修复逻辑
         if data.get("status") == "1" and data.get("pois"):
             all_pois = data["pois"]
-            offset = 20  # 默认每页20个结果
+            offset = 25  # 默认每页25个结果
             
             # 如果需要更多结果且当前结果数量达到了offset限制，尝试获取更多页面
             if len(all_pois) >= offset and len(all_pois) < max_results:
@@ -2615,28 +2628,78 @@ def handle_chain_store_optimization(data):
         if not chain_categories:
             return jsonify({'message': 'No chain store categories found for optimization'}), 400
         
-        # 验证连锁店数据
-        for brand_name, branches in chain_categories.items():
-            if not branches:
-                logger.warning(f"品牌 {brand_name} 没有找到分店")
-            elif len(branches) > MAX_CHAIN_BRANCHES_PER_BRAND:
-                # 限制每个品牌的分店数量，选择最近的分店
-                logger.info(f"品牌 {brand_name} 分店过多 ({len(branches)})，限制为 {MAX_CHAIN_BRANCHES_PER_BRAND} 家")
-                # 按距离家的位置排序，选择最近的分店
-                home_lat = home_location_data['latitude']
-                home_lng = home_location_data['longitude']
-                
-                branches_with_distance = []
-                for branch in branches:
-                    distance = calculate_haversine_distance(
-                        home_lat, home_lng, 
-                        branch['latitude'], branch['longitude']
-                    )
-                    branches_with_distance.append((distance, branch))
-                
-                branches_with_distance.sort(key=lambda x: x[0])
-                chain_categories[brand_name] = [branch for _, branch in branches_with_distance[:MAX_CHAIN_BRANCHES_PER_BRAND]]
+        # 验证和处理连锁店数据
+        for brand_name, value in list(chain_categories.items()): # 使用 list() 以允许在迭代期间修改字典
+            if isinstance(value, int):
+                # 值是整数，表示要选择的分店数量
+                count = value
+                if count <= 0:
+                    logger.warning(f"品牌 {brand_name} 的请求数量无效 ({count})，将从优化中移除")
+                    del chain_categories[brand_name]
+                    continue
+                if count > MAX_CHAIN_BRANCHES_PER_BRAND:
+                    logger.warning(f"品牌 {brand_name} 请求选择的分店数 ({count}) 超过最大限制 ({MAX_CHAIN_BRANCHES_PER_BRAND})，将限制为 {MAX_CHAIN_BRANCHES_PER_BRAND} 家")
+                    chain_categories[brand_name] = MAX_CHAIN_BRANCHES_PER_BRAND
+            
+            elif isinstance(value, list):
+                # 值是列表，表示预先提供的分店列表
+                branches = value
+                if not branches:
+                    logger.warning(f"品牌 {brand_name} 提供了空的分店列表，将从优化中移除")
+                    del chain_categories[brand_name]
+                    continue
+
+                if len(branches) > MAX_CHAIN_BRANCHES_PER_BRAND:
+                    # 限制每个品牌的分店数量，选择最近的分店
+                    logger.info(f"品牌 {brand_name} 分店过多 ({len(branches)})，限制为 {MAX_CHAIN_BRANCHES_PER_BRAND} 家")
+                    # 按距离家的位置排序，选择最近的分店
+                    home_lat = home_location_data['latitude']
+                    home_lng = home_location_data['longitude']
+                    
+                    branches_with_distance = []
+                    for branch in branches:
+                        if 'latitude' in branch and 'longitude' in branch:
+                            distance = calculate_haversine_distance(
+                                home_lat, home_lng, 
+                                branch['latitude'], branch['longitude']
+                            )
+                            branches_with_distance.append((distance, branch))
+                    
+                    branches_with_distance.sort(key=lambda x: x[0])
+                    chain_categories[brand_name] = [branch for _, branch in branches_with_distance[:MAX_CHAIN_BRANCHES_PER_BRAND]]
+            else:
+                logger.warning(f"品牌 {brand_name} 的值类型无效 ({type(value)})，将从优化中移除")
+                del chain_categories[brand_name]
         
+        # 如果传入的是类别和数量，需要先搜索分店
+        if all(isinstance(v, int) for v in chain_categories.values()):
+            logger.info("检测到连锁店类别和数量，开始搜索分店...")
+            searched_branches = {}
+            # 使用线程池并行搜索
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_brand = {
+                    executor.submit(
+                        search_chain_store_branches, 
+                        api_key, brand, home_location_data, city_param
+                    ): brand 
+                    for brand, count in chain_categories.items()
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_brand):
+                    brand = future_to_brand[future]
+                    try:
+                        branches = future.result()
+                        if branches:
+                            searched_branches[brand] = branches
+                        else:
+                            logger.warning(f"未找到品牌 {brand} 的任何分店")
+                    except Exception as exc:
+                        logger.error(f"搜索品牌 {brand} 的分店时出错: {exc}")
+            
+            chain_categories = searched_branches # 使用搜索到的分店列表覆盖原字典
+            if not chain_categories:
+                return jsonify({'message': '所有连锁店品牌均未找到有效分店'}), 404
+
         # 创建TSP with Categories优化器
         optimizer = TSPWithCategoriesOptimizer(
             home_location_data, 
@@ -2647,14 +2710,12 @@ def handle_chain_store_optimization(data):
         )
         
         # 执行优化（使用同步包装器）
-        import asyncio
         try:
             # 尝试获取现有事件循环
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 # 如果事件循环正在运行，在线程池中执行
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
+                with ThreadPoolExecutor() as executor:
                     future = executor.submit(asyncio.run, optimizer.optimize(mode, 60))
                     result = future.result(timeout=120)  # 2分钟超时
             else:
@@ -2664,6 +2725,20 @@ def handle_chain_store_optimization(data):
             result = asyncio.run(optimizer.optimize(mode, 60))
         
         logger.info(f"连锁店优化完成: {result.get('success', False)}")
+        
+        # 添加详细的调试日志
+        logger.info(f"=== 后端返回给前端的数据结构 ===")
+        logger.info(f"Success: {result.get('success')}")
+        logger.info(f"Routes count: {len(result.get('routes', []))}")
+        if result.get('routes'):
+            for i, route in enumerate(result.get('routes', [])[:2]):  # 只打印前2个路线
+                logger.info(f"Route {i+1} keys: {list(route.keys())}")
+                logger.info(f"Route {i+1} type: {route.get('type')}")
+                logger.info(f"Route {i+1} totalTime: {route.get('totalTime')}")
+                logger.info(f"Route {i+1} totalDistance: {route.get('totalDistance')}")
+                logger.info(f"Route {i+1} combination length: {len(route.get('combination', []))}")
+        logger.info(f"=== 调试日志结束 ===")
+        
         return jsonify(result)
         
     except Exception as e:
@@ -2674,62 +2749,78 @@ def handle_chain_store_optimization(data):
         }), 500
 
 def search_chain_store_branches(api_key, brand_name, home_location, city, max_results=MAX_CHAIN_BRANCHES_PER_BRAND):
-    """搜索连锁店分店"""
+    """搜索连锁店分店，并返回按距离排序的最近结果"""
     try:
-        logger.info(f"搜索连锁店分店: {brand_name} in {city}")
+        logger.info(f"搜索连锁店分店: {brand_name} in {city}, 上限: {max_results}家")
         
-        # 构建搜索半径（基于城市大小调整）
-        radius = 10000  # 默认10km半径
-        
-        # 使用POI搜索API
+        # 扩大搜索半径以获取更多候选
+        radius = 15000  # 15km半径
         location_str = f"{home_location['longitude']},{home_location['latitude']}"
         
+        # 总是搜索更多分店（最多25家），以便筛选出最近的
         branches = search_poi(
             api_key, 
             brand_name, 
             city=city,
             location=location_str,
             radius=radius,
-            max_results=max_results
+            max_results=25  # 总是搜索最多25个，以获得最佳选择
         )
         
         if not branches:
-            logger.warning(f"未找到 {brand_name} 的分店")
+            logger.warning(f"在 {city} 未找到 {brand_name} 的任何分店")
             return []
         
-        # 转换为标准格式
-        formatted_branches = []
+        # 转换为标准格式并计算距离
+        formatted_branches_with_distance = []
         for branch in branches:
-            # 修复：直接使用已解析的坐标字段
             latitude = branch.get('latitude')
             longitude = branch.get('longitude')
             
             if latitude is not None and longitude is not None:
                 try:
-                    formatted_branch = {
-                        'id': branch.get('id', f"{brand_name}_{len(formatted_branches)}"),
-                        'name': branch.get('name', brand_name),
-                        'latitude': float(latitude),
-                        'longitude': float(longitude),
-                        'address': branch.get('address', ''),
-                        'brand': brand_name,
-                        'type': 'chain'
-                    }
+                    lat_float = float(latitude)
+                    lon_float = float(longitude)
                     
-                    # 验证坐标有效性
-                    if formatted_branch['latitude'] != 0 and formatted_branch['longitude'] != 0:
-                        formatted_branches.append(formatted_branch)
+                    if lat_float != 0 and lon_float != 0:
+                        distance = calculate_haversine_distance(
+                            home_location['latitude'], home_location['longitude'],
+                            lat_float, lon_float
+                        )
+                        
+                        formatted_branch = {
+                            'id': branch.get('id', f"{brand_name}_{len(formatted_branches_with_distance)}"),
+                            'name': branch.get('name', brand_name),
+                            'latitude': lat_float,
+                            'longitude': lon_float,
+                            'address': branch.get('address', ''),
+                            'brand': brand_name,
+                            'type': 'chain',
+                            'distance_to_home': distance
+                        }
+                        formatted_branches_with_distance.append(formatted_branch)
                 except (ValueError, TypeError) as e:
                     logger.warning(f"分店坐标解析失败: {branch.get('name', 'Unknown')} - {e}")
-                    continue
-            else:
-                logger.warning(f"分店缺少坐标信息: {branch.get('name', 'Unknown')}")
         
-        logger.info(f"找到 {len(formatted_branches)} 家 {brand_name} 分店")
-        return formatted_branches
+        if not formatted_branches_with_distance:
+            logger.warning(f"未找到 {brand_name} 的任何有效分店")
+            return []
+
+        # 按距离家的远近排序
+        formatted_branches_with_distance.sort(key=lambda x: x['distance_to_home'])
+        
+        # 限制返回数量为 max_results
+        top_branches = formatted_branches_with_distance[:max_results]
+        
+        # 从最终结果中移除 'distance_to_home' 字段
+        for branch in top_branches:
+            del branch['distance_to_home']
+        
+        logger.info(f"从 {len(branches)} 个搜索结果中筛选出 {len(top_branches)} 家最近的 {brand_name} 分店")
+        return top_branches
         
     except Exception as e:
-        logger.error(f"搜索连锁店分店失败: {str(e)}")
+        logger.error(f"搜索连锁店分店时发生未知错误: {str(e)}")
         return []
 
 def validate_route_request(data):
