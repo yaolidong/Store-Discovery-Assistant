@@ -314,8 +314,139 @@
            </div>
          </div>
          
-         <!-- 详细路线步骤省略，内容太长 -->
-         <!-- ... 这里省略了大量的路线详情模板代码 ... -->
+         <!-- 访问店铺列表 -->
+         <div v-if="routeSummary && routeSummary.visitShops" class="visit-shops-section">
+           <h4><i class="icon">🏪</i> 访问店铺 ({{ routeSummary.stats.totalShops }}家)</h4>
+           <div class="shop-sequence">
+             <div v-for="(shop, index) in routeSummary.visitShops" :key="shop.id" class="shop-sequence-item">
+               <div class="sequence-number">{{ index + 1 }}</div>
+               <div class="shop-info">
+                 <div class="shop-name">{{ shop.name }}</div>
+                 <div class="shop-address">{{ shop.address }}</div>
+                 <div class="stay-time">停留 {{ getStayDuration(shop.id) }}分钟</div>
+               </div>
+             </div>
+           </div>
+         </div>
+         
+         <!-- 时间安排 -->
+         <div v-if="routeSummary && routeSummary.timeSchedule" class="time-schedule-section">
+           <h4><i class="icon">⏰</i> 时间安排</h4>
+           <div class="timeline">
+             <div v-for="(item, index) in routeSummary.timeSchedule" :key="index" 
+                  :class="['timeline-item', item.type]">
+               <div class="timeline-time">{{ item.time }}</div>
+               <div class="timeline-content">
+                 <div class="timeline-location">{{ item.location }}</div>
+                 <div class="timeline-action">{{ item.action }}</div>
+                 <div v-if="item.address" class="timeline-address">{{ item.address }}</div>
+                 <div v-if="item.stayDuration" class="timeline-duration">{{ item.stayDuration }}</div>
+               </div>
+             </div>
+           </div>
+         </div>
+         
+         <!-- 详细路线指导 -->
+         <div v-if="routeSummary && routeSummary.routeSegments" class="route-guidance-section">
+           <h4><i class="icon">🗺️</i> 详细路线指导</h4>
+           <div class="route-segments">
+             <div v-for="segment in routeSummary.routeSegments" :key="segment.index" class="segment-card">
+               <div class="segment-header">
+                 <span class="segment-number">第{{ segment.index }}段</span>
+                 <span class="segment-route">{{ segment.fromName }} → {{ segment.toName }}</span>
+                 <div class="segment-summary">
+                   <span class="segment-distance">{{ segment.distance }}</span>
+                   <span class="segment-duration">{{ segment.duration }}</span>
+                 </div>
+               </div>
+               
+               <!-- 驾车路线指导 -->
+               <div v-if="segment.mode === 'driving' && segment.steps.length > 0" class="driving-steps">
+                 <div class="mode-badge driving">🚗 驾车</div>
+                 <div class="steps-list">
+                   <div v-for="step in segment.steps" :key="step.index" class="step-item">
+                     <div class="step-number">{{ step.index }}</div>
+                     <div class="step-content">
+                       <div class="step-instruction">{{ step.instruction }}</div>
+                       <div v-if="step.road" class="step-road">{{ step.road }}</div>
+                       <div class="step-info">
+                         <span class="step-distance">{{ step.distance }}</span>
+                         <span class="step-duration">{{ step.duration }}</span>
+                       </div>
+                     </div>
+                   </div>
+                 </div>
+               </div>
+               
+               <!-- 公交路线指导 -->
+               <div v-if="segment.mode === 'public_transit' && segment.transitInfo" class="transit-steps">
+                 <div class="mode-badge transit">🚌 公交</div>
+                 <div class="transit-segments">
+                   <div v-for="(transitSegment, tIndex) in segment.transitInfo" :key="tIndex" class="transit-segment">
+                     
+                     <!-- 步行段 -->
+                     <div v-if="transitSegment.type === 'walking'" class="walking-segment">
+                       <div class="segment-type-badge walking">🚶‍♂️ 步行</div>
+                       <div class="segment-instruction">{{ transitSegment.instruction }}</div>
+                       <div class="segment-time">{{ transitSegment.duration }}</div>
+                     </div>
+                     
+                     <!-- 公交车段 -->
+                     <div v-if="transitSegment.type === 'bus'" class="bus-segment">
+                       <div class="segment-type-badge bus">🚌 公交车</div>
+                       <div v-for="busline in transitSegment.buslines" :key="busline.name" class="busline-info">
+                         <div class="bus-name">{{ busline.name }}</div>
+                         <div class="bus-route">
+                           {{ busline.departure_stop }} → {{ busline.arrival_stop }}
+                         </div>
+                         <div class="bus-details">
+                           <span>{{ busline.via_num }}站</span>
+                           <span>{{ busline.duration }}</span>
+                         </div>
+                       </div>
+                     </div>
+                     
+                     <!-- 地铁段 -->
+                     <div v-if="transitSegment.type === 'subway'" class="subway-segment">
+                       <div class="segment-type-badge subway">🚇 地铁</div>
+                       <div class="subway-line">{{ transitSegment.name }}</div>
+                       <div class="subway-route">
+                         {{ transitSegment.departure_stop }} → {{ transitSegment.arrival_stop }}
+                       </div>
+                       <div class="subway-details">
+                         <span>{{ transitSegment.via_num }}站</span>
+                         <span>{{ transitSegment.duration }}</span>
+                       </div>
+                     </div>
+                   </div>
+                 </div>
+               </div>
+             </div>
+           </div>
+         </div>
+         
+         <!-- 路线统计 -->
+         <div v-if="routeSummary && routeSummary.stats" class="route-stats-section">
+           <h4><i class="icon">📊</i> 路线统计</h4>
+           <div class="stats-grid">
+             <div class="stat-card">
+               <div class="stat-label">访问店铺</div>
+               <div class="stat-value">{{ routeSummary.stats.totalShops }}家</div>
+             </div>
+             <div class="stat-card">
+               <div class="stat-label">总停留时间</div>
+               <div class="stat-value">{{ routeSummary.stats.totalStayTime }}分钟</div>
+             </div>
+             <div class="stat-card">
+               <div class="stat-label">总行程时间</div>
+               <div class="stat-value">{{ formatDuration(routeSummary.stats.totalTravelTime / 60) }}</div>
+             </div>
+             <div class="stat-card">
+               <div class="stat-label">平均停留</div>
+               <div class="stat-value">{{ routeSummary.stats.avgStayTime }}分钟</div>
+             </div>
+           </div>
+         </div>
        </div>
 
        <!-- 加载状态指示器 -->
@@ -1631,16 +1762,246 @@ export default {
 
     // 路线选择
     async selectRoute(routeOption) {
+      console.log('=== 选择的路线数据结构 ===');
+      console.log(JSON.stringify(routeOption, null, 2));
+      
       this.selectedRouteId = routeOption.id;
       this.routeInfo = routeOption;
       this.showRouteInfo = true;
+      
+      // 计算详细路线摘要
+      this.routeSummary = this.calculateDetailedRouteSummary(routeOption);
+      console.log('=== 计算的路线摘要 ===');
+      console.log(JSON.stringify(this.routeSummary, null, 2));
       
       // 在地图上显示路线
       if (this.$refs.mapDisplayRef) {
         await this.$refs.mapDisplayRef.drawOptimizedRoute(routeOption);
       }
       
-      this.showNotification('已选择路线方案', 'success');
+      this.showNotification('已选择路线方案，正在加载详细信息...', 'success');
+    },
+    
+    // 计算详细路线摘要
+    calculateDetailedRouteSummary(routeOption) {
+      if (!routeOption) return null;
+      
+      // 检查实际的数据字段名称并适配
+      const totalTime = routeOption.totalTime || routeOption.total_time || routeOption.total_overall_duration || 0;
+      const totalDistance = routeOption.totalDistance || routeOption.total_distance || 0;
+      const visitShops = routeOption.combination || routeOption.optimized_order || [];
+      const routeSegments = routeOption.route_segments || [];
+      
+      const summary = {
+        totalTime: this.formatDuration(totalTime / 60),
+        totalDistance: this.formatDistance(totalDistance),
+        optimizationType: routeOption.type === 'time' ? '时间优先' : '距离优先',
+        
+        // 访问店铺列表
+        visitShops: visitShops,
+        
+        // 路线段详情
+        routeSegments: this.formatRouteSegments(routeSegments),
+        
+        // 时间安排
+        timeSchedule: this.calculateTimeSchedule(routeOption),
+        
+        // 统计信息
+        stats: {
+          totalShops: visitShops.length,
+          totalStayTime: this.calculateTotalStayTime(visitShops),
+          totalTravelTime: totalTime,
+          avgStayTime: this.calculateAvgStayTime(visitShops)
+        }
+      };
+      
+      return summary;
+    },
+    
+    // 格式化路线段信息
+    formatRouteSegments(segments) {
+      return segments.map((segment, index) => {
+        const segmentInfo = {
+          index: index + 1,
+          fromName: segment.from_name || '未知地点',
+          toName: segment.to_name || '未知地点',
+          distance: this.formatDistance(segment.distance || 0),
+          duration: this.formatDuration((segment.duration || 0) / 60),
+          mode: segment.mode,
+          steps: this.formatSteps(segment.steps || []),
+          transitInfo: null
+        };
+        
+        // 如果是公交模式，添加公交信息
+        if (segment.mode === 'public_transit' && segment.transit_segments) {
+          segmentInfo.transitInfo = this.formatTransitInfo(segment.transit_segments);
+        }
+        
+        return segmentInfo;
+      });
+    },
+    
+    // 格式化步行/驾车指导
+    formatSteps(steps) {
+      return steps.map((step, index) => ({
+        index: index + 1,
+        instruction: step.instruction || step.text || '继续前行',
+        distance: this.formatDistance(step.distance || 0),
+        duration: this.formatDuration((step.duration || 0) / 60),
+        road: step.road || ''
+      }));
+    },
+    
+    // 格式化公交信息
+    formatTransitInfo(transitSegments) {
+      return transitSegments.map((segment, index) => {
+        if (segment.walking) {
+          return {
+            type: 'walking',
+            instruction: `步行${this.formatDistance(segment.walking.distance || 0)}`,
+            duration: this.formatDuration((segment.walking.duration || 0) / 60),
+            steps: segment.walking.steps || []
+          };
+        } else if (segment.bus) {
+          return {
+            type: 'bus',
+            buslines: segment.bus.buslines.map(line => ({
+              name: line.name,
+              departure_stop: line.departure_stop.name,
+              arrival_stop: line.arrival_stop.name,
+              via_num: line.via_num || 0,
+              duration: this.formatDuration((line.duration || 0) / 60)
+            }))
+          };
+        } else if (segment.subway) {
+          return {
+            type: 'subway',
+            name: segment.subway.name,
+            departure_stop: segment.subway.departure_stop.name,
+            arrival_stop: segment.subway.arrival_stop.name,
+            via_num: segment.subway.via_num || 0,
+            duration: this.formatDuration((segment.subway.duration || 0) / 60)
+          };
+        }
+        return null;
+      }).filter(Boolean);
+    },
+    
+    // 计算时间安排
+    calculateTimeSchedule(routeOption) {
+      const schedule = [];
+      const departureTimeMinutes = this.timeToMinutes(this.departureTime);
+      let currentTime = departureTimeMinutes;
+      
+      // 获取访问店铺列表
+      const visitShops = routeOption.combination || routeOption.optimized_order || [];
+      const routeSegments = routeOption.route_segments || [];
+      
+      // 起点 - 家
+      schedule.push({
+        time: this.minutesToTime(currentTime),
+        location: '家',
+        type: 'departure',
+        action: '出发'
+      });
+      
+      // 如果有路线段信息，使用路线段计算时间
+      if (routeSegments.length > 0) {
+        routeSegments.forEach((segment, index) => {
+          // 行程时间（转换为分钟）
+          const travelTime = (segment.duration || 0) / 60;
+          currentTime += travelTime;
+          
+          // 到达目的地（排除最后一段回家的路线）
+          if (index < visitShops.length) {
+            const shop = visitShops[index];
+            const stayDuration = this.getStayDuration(shop.id);
+            
+            schedule.push({
+              time: this.minutesToTime(currentTime),
+              location: shop.name,
+              type: 'arrival',
+              action: '到达',
+              address: shop.address
+            });
+            
+            // 停留时间
+            currentTime += stayDuration;
+            
+            schedule.push({
+              time: this.minutesToTime(currentTime),
+              location: shop.name,
+              type: 'departure',
+              action: '离开',
+              stayDuration: `${stayDuration}分钟`
+            });
+          }
+        });
+      } else {
+        // 如果没有详细路线段，使用简单的时间估算
+        visitShops.forEach((shop, index) => {
+          // 估算每段15分钟行程
+          currentTime += 15;
+          
+          const stayDuration = this.getStayDuration(shop.id);
+          
+          schedule.push({
+            time: this.minutesToTime(currentTime),
+            location: shop.name,
+            type: 'arrival',
+            action: '到达',
+            address: shop.address
+          });
+          
+          currentTime += stayDuration;
+          
+          schedule.push({
+            time: this.minutesToTime(currentTime),
+            location: shop.name,
+            type: 'departure',
+            action: '离开',
+            stayDuration: `${stayDuration}分钟`
+          });
+        });
+        
+        // 回家时间
+        currentTime += 15;
+      }
+      
+      // 返回家
+      schedule.push({
+        time: this.minutesToTime(currentTime),
+        location: '家',
+        type: 'arrival',
+        action: '到达家'
+      });
+      
+      return schedule;
+    },
+    
+    // 时间工具方法
+    timeToMinutes(timeStr) {
+      const [hours, minutes] = timeStr.split(':').map(Number);
+      return hours * 60 + minutes;
+    },
+    
+    minutesToTime(minutes) {
+      const hours = Math.floor(minutes / 60);
+      const mins = Math.round(minutes % 60);
+      return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+    },
+    
+    // 计算总停留时间
+    calculateTotalStayTime(shops) {
+      return shops.reduce((total, shop) => {
+        return total + this.getStayDuration(shop.id);
+      }, 0);
+    },
+    
+    // 计算平均停留时间
+    calculateAvgStayTime(shops) {
+      if (shops.length === 0) return 0;
+      return Math.round(this.calculateTotalStayTime(shops) / shops.length);
     },
 
     onRouteCalculated(routeData) {
