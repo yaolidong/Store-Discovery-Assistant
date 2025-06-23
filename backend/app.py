@@ -70,6 +70,27 @@ def unauthorized_handler():
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# QPS控制：记录每个API的最后调用时间
+from collections import defaultdict
+import threading
+api_call_times = defaultdict(float)
+api_call_lock = threading.Lock()
+
+def smart_qps_control(api_name="transit", min_interval=0.3):
+    """智能QPS控制，确保API调用间隔"""
+    with api_call_lock:
+        current_time = time.time()
+        last_call_time = api_call_times[api_name]
+        
+        if last_call_time > 0:
+            elapsed = current_time - last_call_time
+            if elapsed < min_interval:
+                sleep_time = min_interval - elapsed
+                logger.debug(f"QPS控制：{api_name} API需要等待{sleep_time:.2f}秒")
+                time.sleep(sleep_time)
+        
+        api_call_times[api_name] = time.time()
+
 def amap_api_handler(api_name="Unknown API"):
     """通用的高德API错误处理装饰器"""
     def decorator(func):
@@ -451,7 +472,11 @@ class TSPWithCategoriesOptimizer:
             cost_matrix = await self._build_cost_matrix(travel_mode)
             
             # 执行优化算法
-            if len(self.chain_categories) <= 3 and all(len(shops) <= 5 for shops in self.chain_categories.values()):
+            if not self.chain_categories and self.private_shops:
+                # 只有私人店铺的情况
+                logger.info(f"只有私人店铺的情况: {len(self.private_shops)} 家私人店铺")
+                result = await self._private_shops_only_optimization(cost_matrix)
+            elif len(self.chain_categories) <= 3 and all(len(shops) <= 5 for shops in self.chain_categories.values()):
                 # 小规模问题：使用精确算法
                 logger.info(f"使用精确算法: {len(self.chain_categories)} 个品牌")
                 result = await self._exact_optimization(cost_matrix)
@@ -537,6 +562,26 @@ class TSPWithCategoriesOptimizer:
                             'polyline': '',
                             'steps': []
                         }
+                        
+                        # 如果是公交模式失败，提供更合理的备选信息
+                        if travel_mode == 'public_transit':
+                            fallback_result['segments'] = []
+                            fallback_result['api_fallback'] = True
+                            fallback_result['fallback_reason'] = '公交API查询失败'
+                            # 提供一个提示性的步骤
+                            fallback_result['steps'] = [{
+                                'type': 'api_error',
+                                'instruction': f"⚠️ 公交路线查询失败，建议使用高德地图APP查询从【{self.all_points[i]['name']}】到【{self.all_points[j]['name']}】的具体公交路线",
+                                'distance': fallback_result['distance'],
+                                'duration': fallback_result['duration'],
+                                'road': '公交路线查询失败'
+                            }]
+                            fallback_result['cost'] = 0
+                            fallback_result['walking_distance'] = 0
+                            fallback_result['nightflag'] = "0"
+                            fallback_result['railway_flag'] = "0"
+                            logger.warning(f"公交API失败，使用直线距离备选: {self.all_points[i]['name']} -> {self.all_points[j]['name']}")
+                        
                         cost_matrix[i][j] = fallback_result
                         cost_matrix[j][i] = fallback_result
                         
@@ -553,10 +598,117 @@ class TSPWithCategoriesOptimizer:
                         'polyline': '',
                         'steps': []
                     }
+                    
+                    # 如果是公交模式失败，提供更合理的备选信息
+                    if travel_mode == 'public_transit':
+                        fallback_result['segments'] = []
+                        fallback_result['api_fallback'] = True
+                        fallback_result['fallback_reason'] = '公交API查询异常'
+                        # 提供一个提示性的步骤
+                        fallback_result['steps'] = [{
+                            'type': 'api_error',
+                            'instruction': f"⚠️ 公交路线查询异常，建议使用高德地图APP查询从【{self.all_points[i]['name']}】到【{self.all_points[j]['name']}】的具体公交路线",
+                            'distance': fallback_result['distance'],
+                            'duration': fallback_result['duration'],
+                            'road': '公交路线查询异常'
+                        }]
+                        fallback_result['cost'] = 0
+                        fallback_result['walking_distance'] = 0
+                        fallback_result['nightflag'] = "0"
+                        fallback_result['railway_flag'] = "0"
+                        logger.warning(f"公交API异常，使用直线距离备选: {self.all_points[i]['name']} -> {self.all_points[j]['name']}")
+                    
                     cost_matrix[i][j] = fallback_result
                     cost_matrix[j][i] = fallback_result
                     
         return cost_matrix
+
+    async def _private_shops_only_optimization(self, cost_matrix):
+        """处理只有私人店铺的情况"""
+        logger.info("开始处理只有私人店铺的路线优化")
+        
+        # 创建包含家和所有私人店铺的路线点列表
+        route_points = [0]  # 从家开始（索引0）
+        route_points.extend(range(1, len(self.private_shops) + 1))  # 私人店铺的索引
+        
+        logger.info(f"私人店铺路线点: {route_points}")
+        
+        # 使用TSP优化器来找到最优访问顺序
+        optimizer = TSPOptimizer(cost_matrix, [self.all_points[i] for i in route_points], route_points)
+        optimized_routes, optimized_costs = optimizer.hybrid_optimize()
+        
+        all_candidates = []
+        
+        if optimized_routes:
+            # 处理时间最优的路线
+            if 'time' in optimized_routes and optimized_routes['time']:
+                time_costs = optimized_costs.get('time', []) if optimized_costs else []
+                for i, route in enumerate(optimized_routes['time']):
+                    if route:
+                        # 映射路线索引到全局索引
+                        mapped_route = [route_points[j] for j in route if j < len(route_points)]
+                        
+                        # 计算总成本
+                        total_time = sum(cost_matrix[mapped_route[k]][mapped_route[k+1]]['duration'] 
+                                       for k in range(len(mapped_route) - 1))
+                        total_distance = sum(cost_matrix[mapped_route[k]][mapped_route[k+1]]['distance'] 
+                                           for k in range(len(mapped_route) - 1))
+                        
+                        all_candidates.append({
+                            'route_indices': mapped_route,
+                            'selected_shops': [idx for idx in mapped_route if idx != 0],  # 排除家
+                            'total_time_cost': total_time,
+                            'total_distance_cost': total_distance,
+                            'optimization_type': 'time',
+                            'combination_id': tuple(sorted([idx for idx in mapped_route if idx != 0]))
+                        })
+            
+            # 处理距离最优的路线
+            if 'distance' in optimized_routes and optimized_routes['distance']:
+                distance_costs = optimized_costs.get('distance', []) if optimized_costs else []
+                for i, route in enumerate(optimized_routes['distance']):
+                    if route:
+                        # 映射路线索引到全局索引
+                        mapped_route = [route_points[j] for j in route if j < len(route_points)]
+                        
+                        # 计算总成本
+                        total_time = sum(cost_matrix[mapped_route[k]][mapped_route[k+1]]['duration'] 
+                                       for k in range(len(mapped_route) - 1))
+                        total_distance = sum(cost_matrix[mapped_route[k]][mapped_route[k+1]]['distance'] 
+                                           for k in range(len(mapped_route) - 1))
+                        
+                        # 避免重复的路线
+                        combination_id = tuple(sorted([idx for idx in mapped_route if idx != 0]))
+                        if not any(c['combination_id'] == combination_id for c in all_candidates):
+                            all_candidates.append({
+                                'route_indices': mapped_route,
+                                'selected_shops': [idx for idx in mapped_route if idx != 0],
+                                'total_time_cost': total_time,
+                                'total_distance_cost': total_distance,
+                                'optimization_type': 'distance',
+                                'combination_id': combination_id
+                            })
+        
+        if not all_candidates:
+            logger.warning("私人店铺优化未生成任何候选路线")
+            # 创建一个简单的线性路线作为备选
+            linear_route = [0] + list(range(1, len(self.private_shops) + 1)) + [0]
+            total_time = sum(cost_matrix[linear_route[k]][linear_route[k+1]]['duration'] 
+                           for k in range(len(linear_route) - 1))
+            total_distance = sum(cost_matrix[linear_route[k]][linear_route[k+1]]['distance'] 
+                               for k in range(len(linear_route) - 1))
+            
+            all_candidates.append({
+                'route_indices': linear_route,
+                'selected_shops': list(range(1, len(self.private_shops) + 1)),
+                'total_time_cost': total_time,
+                'total_distance_cost': total_distance,
+                'optimization_type': 'linear',
+                'combination_id': tuple(sorted(range(1, len(self.private_shops) + 1)))
+            })
+        
+        logger.info(f"私人店铺优化生成了 {len(all_candidates)} 个候选路线")
+        return self._select_top_candidates(all_candidates)
         
     async def _exact_optimization(self, cost_matrix):
         """精确优化算法（适用于小规模问题）- 改进版本，生成更多候选路线"""
@@ -1883,96 +2035,189 @@ def _parse_transit_polyline(transit_details):
 def _parse_transit_details(transit_segments):
     """
     Parses transit segments from Amap API response to extract detailed step-by-step instructions.
+    修复后的版本：正确解析复合segment数据结构，并处理数据类型转换
     """
     detailed_steps = []
     if not transit_segments:
         return detailed_steps
 
-    for segment in transit_segments:
-        if segment.get("walking") and isinstance(segment["walking"], dict) and segment["walking"].get("steps"):
-            for step in segment["walking"]["steps"]:
-                instruction = step.get("instruction", "Walk")
-                # Add distance and duration to instruction if available
-                distance = step.get("distance", "")
-                duration = step.get("duration", "")
-                if distance:
-                    instruction += f" (Distance: {distance}m"
-                if duration:
-                    instruction += f", Duration: {duration}s"
-                if distance or duration:
-                    instruction += ")"
-                detailed_steps.append({"type": "walk", "instruction": instruction})
+    logger.info(f"解析公交详情，共{len(transit_segments)}个路线段")
 
-        elif segment.get("bus") and isinstance(segment["bus"], dict) and segment["bus"].get("lines"):
-            for bus_line_info in segment["bus"]["lines"]: # A segment can have multiple bus lines (e.g. alternatives)
-                line_name = bus_line_info.get("name", "Unknown Bus")
-                departure_stop = bus_line_info.get("departure_stop", {}).get("name", "Unknown Stop")
-                arrival_stop = bus_line_info.get("arrival_stop", {}).get("name", "Unknown Stop")
-                num_stops = len(bus_line_info.get("via_stops", [])) + 1 # departure is not via_stop
+    def safe_int(value, default=0):
+        """安全地将值转换为整数"""
+        try:
+            if isinstance(value, str):
+                return int(float(value))  # 先转float再转int，处理"123.0"这样的字符串
+            return int(value) if value is not None else default
+        except (ValueError, TypeError):
+            return default
 
-                instruction = f"Take {line_name} from {departure_stop} to {arrival_stop} ({num_stops} stop{'s' if num_stops > 1 else ''})."
+    for i, segment in enumerate(transit_segments):
+        segment_steps = []
+        
+        # 步行段
+        if segment.get("walking") and isinstance(segment["walking"], dict):
+            walking_data = segment["walking"]
+            if walking_data.get("steps"):
+                for step in walking_data["steps"]:
+                    instruction = step.get("instruction", "步行")
+                    distance = safe_int(step.get("distance", 0))
+                    duration = safe_int(step.get("duration", 0))
+                    
+                    if distance > 0:
+                        instruction += f" {distance}米"
+                    if duration > 0:
+                        instruction += f" (约{duration//60}分钟)"
+                    
+                    segment_steps.append({
+                        "type": "walking",
+                        "instruction": instruction,
+                        "distance": distance,
+                        "duration": duration
+                    })
+            else:
+                # 如果没有详细步骤，但有walking信息
+                distance = safe_int(walking_data.get("distance", 0))
+                duration = safe_int(walking_data.get("duration", 0))
+                instruction = f"步行 {distance}米"
+                if duration > 0:
+                    instruction += f" (约{duration//60}分钟)"
+                segment_steps.append({
+                    "type": "walking",
+                    "instruction": instruction,
+                    "distance": distance,
+                    "duration": duration
+                })
 
-                # Add via_stops details
-                via_stops_details = []
-                for via_stop in bus_line_info.get("via_stops", []):
-                    via_stops_details.append(via_stop.get("name", "Unknown Intermediate Stop"))
-                if via_stops_details:
-                    instruction += f" Via: {', '.join(via_stops_details)}."
+        # 公交段 - 修复：使用buslines而不是lines，智能判断公交和地铁
+        if segment.get("bus") and isinstance(segment["bus"], dict):
+            bus_data = segment["bus"]
+            buslines = bus_data.get("buslines", [])
+            
+            if buslines:
+                for bus_line_info in buslines:
+                    line_name = bus_line_info.get("name", "未知公交线路")
+                    departure_stop = bus_line_info.get("departure_stop", {}).get("name", "起点站")
+                    arrival_stop = bus_line_info.get("arrival_stop", {}).get("name", "终点站")
+                    via_num = safe_int(bus_line_info.get("via_num", 0))
+                    distance = safe_int(bus_line_info.get("distance", 0))
+                    duration = safe_int(bus_line_info.get("duration", 0))
 
-                detailed_steps.append({"type": "bus", "instruction": instruction})
+                    # 智能判断是地铁还是公交车
+                    is_metro = (
+                        "地铁" in line_name or 
+                        "号线" in line_name or 
+                        "Metro" in line_name.upper() or
+                        "Line" in line_name or
+                        any(keyword in line_name for keyword in ["轻轨", "城铁", "有轨电车"])
+                    )
+                    
+                    transport_type = "railway" if is_metro else "bus"
+                    
+                    # 调试日志
+                    logger.info(f"智能判断线路类型 - 线路名称: '{line_name}', 是否地铁: {is_metro}, 类型: {transport_type}")
 
-        elif segment.get("railway") and isinstance(segment["railway"], dict):
-            # Railway can have 'alters' for alternative trains, or direct info
-            railway_info_to_parse = segment["railway"]
-            if segment["railway"].get("alters") and segment["railway"]["alters"]:
-                railway_info_to_parse = segment["railway"]["alters"][0] # Take the first alternative
+                    instruction = f"乘坐 {line_name}，从 {departure_stop} 到 {arrival_stop}"
+                    if via_num > 0:
+                        instruction += f" (经过{via_num}站)"
+                    if duration > 0:
+                        instruction += f" 约{duration//60}分钟"
 
-            name = railway_info_to_parse.get("name", "Unknown Line")
-            trip = railway_info_to_parse.get("trip", "Unknown Trip") # More specific e.g. G1234
-            departure_stop = railway_info_to_parse.get("departure_stop", {}).get("name", "Unknown Station")
-            arrival_stop = railway_info_to_parse.get("arrival_stop", {}).get("name", "Unknown Station")
-            num_stops = len(railway_info_to_parse.get("via_stops", [])) + 1
+                    segment_steps.append({
+                        "type": transport_type,
+                        "instruction": instruction,
+                        "line_name": line_name,
+                        "departure_stop": departure_stop,
+                        "arrival_stop": arrival_stop,
+                        "via_num": via_num,
+                        "distance": distance,
+                        "duration": duration
+                    })
+                    
+                logger.debug(f"段{i+1}: 解析到{len(buslines)}条线路（{sum(1 for info in buslines if '地铁' in info.get('name', '') or '号线' in info.get('name', ''))}条地铁，{len(buslines) - sum(1 for info in buslines if '地铁' in info.get('name', '') or '号线' in info.get('name', ''))}条公交）")
 
-            instruction = f"Take {name} ({trip}) from {departure_stop} to {arrival_stop} ({num_stops} stop{'s' if num_stops > 1 else ''})."
+        # 地铁段 - 修复：直接解析railway数据，但过滤无效数据
+        if segment.get("railway") and isinstance(segment["railway"], dict):
+            railway_data = segment["railway"]
+            
+            # 有些地铁数据可能在alters中，有些直接在railway中
+            railway_info_list = []
+            if railway_data.get("alters"):
+                railway_info_list = railway_data["alters"]
+            else:
+                # 直接使用railway数据，但只有在有有效数据时才处理
+                if (railway_data.get("name") and railway_data.get("name") != "未知地铁线路" and
+                    (safe_int(railway_data.get("distance", 0)) > 0 or safe_int(railway_data.get("duration", 0)) > 0)):
+                    railway_info_list = [railway_data]
+            
+            for railway_info in railway_info_list:
+                name = railway_info.get("name", "未知地铁线路")
+                departure_stop = railway_info.get("departure_stop", {}).get("name", "起点站")
+                arrival_stop = railway_info.get("arrival_stop", {}).get("name", "终点站")
+                via_num = safe_int(railway_info.get("via_num", 0))
+                distance = safe_int(railway_info.get("distance", 0))
+                duration = safe_int(railway_info.get("duration", 0))
 
-            # Add via_stops details for railway
-            via_stops_details_rail = []
-            for via_stop in railway_info_to_parse.get("via_stops", []):
-                 via_stops_details_rail.append(via_stop.get("name", "Unknown Intermediate Station"))
-            if via_stops_details_rail:
-                instruction += f" Via: {', '.join(via_stops_details_rail)}."
+                # 过滤无效的railway数据：必须有有效的线路名称和距离/时间
+                if (name == "未知地铁线路" or (distance == 0 and duration == 0)):
+                    logger.info(f"跳过无效的railway数据: name={name}, distance={distance}, duration={duration}")
+                    continue
 
-            detailed_steps.append({"type": "railway", "instruction": instruction})
+                instruction = f"乘坐 {name}，从 {departure_stop} 到 {arrival_stop}"
+                if via_num > 0:
+                    instruction += f" (经过{via_num}站)"
+                if duration > 0:
+                    instruction += f" 约{duration//60}分钟"
 
-        elif segment.get("taxi") and isinstance(segment["taxi"], dict):
-            # Taxi segments usually don't have detailed steps like bus/walk, more like a summary
-            distance = segment["taxi"].get("distance")
-            duration = segment["taxi"].get("duration")
-            instruction = "Take a taxi"
-            if distance: instruction += f" (Distance: {distance}m"
-            if duration: instruction += f", Duration: {duration}s"
-            if distance or duration: instruction += ")"
-            detailed_steps.append({"type": "taxi", "instruction": instruction})
+                segment_steps.append({
+                    "type": "railway",
+                    "instruction": instruction,
+                    "line_name": name,
+                    "departure_stop": departure_stop,
+                    "arrival_stop": arrival_stop,
+                    "via_num": via_num,
+                    "distance": distance,
+                    "duration": duration
+                })
+                
+            if railway_info_list:
+                logger.debug(f"段{i+1}: 解析到{len([r for r in railway_info_list if r.get('name') != '未知地铁线路'])}条有效地铁线路")
 
+        # 出租车段
+        if segment.get("taxi") and isinstance(segment["taxi"], dict):
+            taxi_data = segment["taxi"]
+            distance = safe_int(taxi_data.get("distance", 0))
+            duration = safe_int(taxi_data.get("duration", 0))
+            
+            instruction = "乘坐出租车"
+            if distance > 0:
+                instruction += f" {distance}米"
+            if duration > 0:
+                instruction += f" 约{duration//60}分钟"
+                
+            segment_steps.append({
+                "type": "taxi",
+                "instruction": instruction,
+                "distance": distance,
+                "duration": duration
+            })
+
+        # 将该段的所有步骤添加到总步骤列表
+        detailed_steps.extend(segment_steps)
+        
+        if segment_steps:
+            logger.debug(f"段{i+1}: 解析到{len(segment_steps)}个步骤")
         else:
-            # Fallback for other types or if structure is unexpected
-            # Try to find any instruction-like field if available
-            instruction_text = "Transit segment (details not fully parsed)."
-            if segment.get("instruction"): # Unlikely top-level, but as a fallback
-                instruction_text = segment["instruction"]
-            detailed_steps.append({"type": "transit", "instruction": instruction_text})
+            logger.warning(f"段{i+1}: 未能解析到任何有效步骤，segment keys: {list(segment.keys())}")
 
+    logger.info(f"公交详情解析完成，共{len(detailed_steps)}个步骤")
     return detailed_steps
 
 
 @amap_api_handler("get_public_transit_segment_details")
 def get_public_transit_segment_details(api_key, origin_lat, origin_lng, dest_lat, dest_lng, city, strategy=0):
     """
-    Gets public transit route details using Amap Integrated Directions API，支持缓存.
-    `city` is the origin city code or name.
-    Strategy: 0 for recommended, other values for different preferences (e.g., less walking).
-    Returns a dictionary like {"distance": meters, "duration": seconds, "polyline": "concatenated_polyline_string"} or None.
-    Distance for transit is often walking distance + transit line distance, can be complex. Amap returns 'distance' field for the whole transit path.
+    Gets public transit route details using Amap Integrated Directions API，支持缓存和智能重试.
     """
     if not api_key:
         logger.error("Amap API密钥未配置")
@@ -1983,69 +2228,84 @@ def get_public_transit_segment_details(api_key, origin_lat, origin_lng, dest_lat
     if cached_result:
         return cached_result
 
+    # 智能QPS控制
+    smart_qps_control("transit", 0.3)
+
     url = "https://restapi.amap.com/v3/direction/transit/integrated"
     params = {
         "key": api_key,
         "origin": f"{origin_lng},{origin_lat}",
         "destination": f"{dest_lng},{dest_lat}",
-        "city": str(city), # City code or name for origin city
-        # "cityd": str(city), # Optionally, destination city if different, but often same for intra-city
+        "city": str(city),
         "strategy": str(strategy),
-        "extensions": "all", # Request "all" to get polyline details for segments
+        "extensions": "all",
     }
 
-    try:
-        response = requests.get(url, params=params, timeout=15) # Transit can take longer
-        response.raise_for_status()
-        data = response.json()
-
-        if data.get("status") == "1" and data.get("route") and data["route"].get("transits"):
-            transit_path = data["route"]["transits"][0] # Take the first recommended transit path
-
-            # The 'polyline' for the entire transit path is not directly provided in 'transits' object usually.
-            # It's often part of individual segments (walking, bus, subway lines).
-            # We need to concatenate them or use a primary segment's polyline.
-            # For simplicity, _parse_transit_polyline will try to build one.
-            # Amap's total 'distance' for transit includes walking and in-vehicle. 'duration' is total time.
-
-            full_polyline = _parse_transit_polyline(transit_path)
-            detailed_steps = _parse_transit_details(transit_path.get("segments"))
-
-            result = {
-                "distance": int(transit_path.get("distance", 0)), # Overall distance
-                "duration": int(transit_path.get("duration", 0)), # Overall duration
-                "polyline": full_polyline,
-                "steps": detailed_steps,
-                "segments": transit_path.get("segments", []),  # 添加完整的segments信息
-                "cost": float(transit_path.get("cost", 0)),  # 公交费用
-                "walking_distance": int(transit_path.get("walking_distance", 0)),  # 步行距离
-                "nightflag": transit_path.get("nightflag", "0"),  # 是否夜班车
-                "railway_flag": transit_path.get("railway_flag", "0")  # 是否包含地铁
-            }
+    # 重试机制
+    max_retries = 2
+    for attempt in range(max_retries + 1):
+        try:
+            if attempt > 0:
+                # 重试时增加等待时间
+                wait_time = 1.0 * (2 ** attempt)  # 指数退避
+                logger.info(f"公交API重试第{attempt}次，等待{wait_time}秒...")
+                time.sleep(wait_time)
             
-            # 将结果存入缓存
-            distance_cache.set(origin_lat, origin_lng, dest_lat, dest_lng, result, 'public_transit', city)
-            logger.debug(f"公交路线规划成功: {origin_lat},{origin_lng} -> {dest_lat},{dest_lng}")
-            return result
-        else:
-            # 如果API成功但没有找到公交路线，这是正常情况（可能该路线没有公交）
-            info_msg = data.get('info', 'Unknown error')
-            if data.get("status") == "1":
-                logger.info(f"未找到公交路线: ({origin_lng},{origin_lat}) -> ({dest_lng},{dest_lat}) in city {city}")
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("status") == "1" and data.get("route") and data["route"].get("transits"):
+                transit_path = data["route"]["transits"][0]
+
+                full_polyline = _parse_transit_polyline(transit_path)
+                detailed_steps = _parse_transit_details(transit_path.get("segments"))
+
+                result = {
+                    "distance": int(transit_path.get("distance", 0)),
+                    "duration": int(transit_path.get("duration", 0)),
+                    "polyline": full_polyline,
+                    "steps": detailed_steps,
+                    "segments": transit_path.get("segments", []),
+                    "cost": float(transit_path.get("cost", 0)),
+                    "walking_distance": int(transit_path.get("walking_distance", 0)),
+                    "nightflag": transit_path.get("nightflag", "0"),
+                    "railway_flag": transit_path.get("railway_flag", "0")
+                }
+                
+                # 将结果存入缓存
+                distance_cache.set(origin_lat, origin_lng, dest_lat, dest_lng, result, 'public_transit', city)
+                logger.debug(f"公交路线规划成功: {origin_lat},{origin_lng} -> {dest_lat},{dest_lng}")
+                return result
             else:
-                logger.warning(f"高德公交API错误: {info_msg} from ({origin_lng},{origin_lat}) to ({dest_lng},{dest_lat}) in city {city}")
+                # API返回成功但没有路线数据
+                info_msg = data.get('info', 'Unknown error')
+                info_code = data.get('infocode', 'Unknown')
+                
+                if info_code == 'CUQPS_HAS_EXCEEDED_THE_LIMIT':
+                    if attempt < max_retries:
+                        logger.warning(f"公交API QPS超限，将在{1.0 * (2 ** (attempt + 1))}秒后重试...")
+                        continue
+                    else:
+                        logger.error(f"公交API QPS超限，已达最大重试次数")
+                        return None
+                else:
+                    logger.info(f"未找到公交路线: {info_msg} ({info_code})")
+                    return None
+
+        except requests.exceptions.Timeout:
+            logger.error(f"公交路线规划请求超时 (尝试{attempt+1}/{max_retries+1})")
+            if attempt >= max_retries:
+                return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"公交路线规划请求失败 (尝试{attempt+1}/{max_retries+1}): {e}")
+            if attempt >= max_retries:
+                return None
+        except (ValueError, KeyError, IndexError) as e:
+            logger.error(f"公交路线规划响应解析错误: {e}")
             return None
-    except requests.exceptions.Timeout:
-        logger.error(f"公交路线规划请求超时: ({origin_lng},{origin_lat}) -> ({dest_lng},{dest_lat})")
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"公交路线规划请求失败: {e}")
-        return None
-    except (ValueError, KeyError, IndexError) as e:
-        logger.error(f"公交路线规划响应解析错误: {e}")
-        return None
-    finally:
-        time.sleep(0.05) # 增加50毫秒延迟以避免QPS超限
+
+    return None  # 所有重试都失败了
 
 
 # get_driving_route_segment_details function has been replaced with the safe version above
@@ -2624,9 +2884,13 @@ def handle_chain_store_optimization(data):
                 else:
                     private_shops.append(shop)
         
-        # 如果没有连锁店类别，返回错误
-        if not chain_categories:
-            return jsonify({'message': 'No chain store categories found for optimization'}), 400
+        # 如果没有连锁店类别，但有私人店铺，继续处理
+        if not chain_categories and not private_shops:
+            return jsonify({'message': 'No shops found for optimization'}), 400
+        
+        # 如果只有私人店铺，没有连锁店，也允许优化
+        if not chain_categories and private_shops:
+            logger.info(f"只有私人店铺 ({len(private_shops)} 家)，进行私人店铺路线优化")
         
         # 验证和处理连锁店数据
         for brand_name, value in list(chain_categories.items()): # 使用 list() 以允许在迭代期间修改字典
@@ -2672,7 +2936,7 @@ def handle_chain_store_optimization(data):
                 del chain_categories[brand_name]
         
         # 如果传入的是类别和数量，需要先搜索分店
-        if all(isinstance(v, int) for v in chain_categories.values()):
+        if chain_categories and all(isinstance(v, int) for v in chain_categories.values()):
             logger.info("检测到连锁店类别和数量，开始搜索分店...")
             searched_branches = {}
             # 使用线程池并行搜索

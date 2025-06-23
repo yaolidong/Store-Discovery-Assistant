@@ -379,9 +379,11 @@
                </div>
                
                <!-- 公交路线指导 -->
-               <div v-if="segment.mode === 'public_transit' && segment.transitInfo" class="transit-steps">
+               <div v-if="segment.mode === 'public_transit'" class="transit-steps">
                  <div class="mode-badge transit">🚌 公交</div>
-                 <div class="transit-segments">
+                 
+                 <!-- 有公交信息时显示详细路线 -->
+                 <div v-if="segment.transitInfo && segment.transitInfo.length > 0" class="transit-segments">
                    <div v-for="(transitSegment, tIndex) in segment.transitInfo" :key="tIndex" class="transit-segment">
                      
                      <!-- 步行段 -->
@@ -403,6 +405,14 @@
                            <span>{{ busline.via_num }}站</span>
                            <span>{{ busline.duration }}</span>
                          </div>
+                         <div v-if="busline.via_stops && busline.via_stops.length > 0" class="via-stops">
+                           <div class="via-label">途经站点：</div>
+                           <div class="via-stops-list">
+                             <span v-for="(stop, idx) in busline.via_stops" :key="idx" class="via-stop">
+                               {{ stop.name || stop }}
+                             </span>
+                           </div>
+                         </div>
                        </div>
                      </div>
                      
@@ -417,6 +427,59 @@
                          <span>{{ transitSegment.via_num }}站</span>
                          <span>{{ transitSegment.duration }}</span>
                        </div>
+                       <div v-if="transitSegment.via_stops && transitSegment.via_stops.length > 0" class="via-stops">
+                         <div class="via-label">途经站点：</div>
+                         <div class="via-stops-list">
+                           <span v-for="(stop, idx) in transitSegment.via_stops" :key="idx" class="via-stop">
+                             {{ stop.name || stop }}
+                           </span>
+                         </div>
+                       </div>
+                     </div>
+                     
+                     <!-- 出租车段 -->
+                     <div v-if="transitSegment.type === 'taxi'" class="taxi-segment">
+                       <div class="segment-type-badge taxi">🚕 出租车</div>
+                       <div class="segment-instruction">{{ transitSegment.instruction }}</div>
+                       <div class="segment-time">{{ transitSegment.duration }}</div>
+                       <div class="segment-distance">{{ transitSegment.distance }}</div>
+                     </div>
+                   </div>
+                 </div>
+                 
+                 <!-- 无公交信息时，使用steps显示混合交通方式 -->
+                 <div v-else-if="segment.steps && segment.steps.length > 0" class="mixed-transit-steps">
+                   <div class="steps-list">
+                     <div v-for="step in segment.steps" :key="step.index" class="step-item" :class="'step-type-' + step.type">
+                       <div class="step-icon">
+                         <span v-if="step.type === 'walking'">🚶</span>
+                         <span v-else-if="step.type === 'bus'">🚌</span>
+                         <span v-else-if="step.type === 'railway'">🚇</span>
+                         <span v-else-if="step.type === 'taxi'">🚕</span>
+                         <span v-else>{{ step.index }}</span>
+                       </div>
+                       <div class="step-content">
+                         <div class="step-instruction">{{ step.instruction }}</div>
+                         <div v-if="step.road" class="step-road">{{ step.road }}</div>
+                         <div class="step-info">
+                           <span class="step-distance">{{ step.distance }}</span>
+                           <span class="step-duration">{{ step.duration }}</span>
+                         </div>
+                       </div>
+                     </div>
+                   </div>
+                 </div>
+                 
+                 <!-- 完全无路线信息时显示提示 -->
+                 <div v-else class="transit-fallback">
+                   <div class="fallback-message">
+                     <i class="icon">⚠️</i>
+                     <div class="fallback-text">
+                       <p>该路段暂无公交线路信息</p>
+                       <p class="fallback-details">
+                         距离: {{ segment.distance }} | 预计时间: {{ segment.duration }}
+                       </p>
+                       <p class="fallback-suggestion">建议选择其他出行方式或步行前往</p>
                      </div>
                    </div>
                  </div>
@@ -1571,7 +1634,11 @@ export default {
         console.log(`[Token: ${currentRequestToken}] API请求成功，处理结果。`);
         if (response.ok) {
           const data = await response.json();
-          this.shopSuggestions = data.suggestions || [];
+          // 确保所有从API搜索返回的店铺都被标记为私人店铺
+          this.shopSuggestions = (data.suggestions || []).map(shop => ({
+            ...shop,
+            type: 'private' // 明确标记为私人店铺
+          }));
         } else {
           this.shopSuggestions = [];
         }
@@ -1713,7 +1780,7 @@ export default {
           home_location: this.homeLocation,
           private_shops: formattedPrivateShops,
           chain_categories: chainCategories,
-          mode: this.travelMode,
+          mode: this.travelMode === 'TRANSIT' ? 'public_transit' : this.travelMode.toLowerCase(),
           departure_time: this.departureTime,
           stay_durations: this.stayDurations,
           default_stay_duration: this.defaultStayDuration,
@@ -1829,12 +1896,37 @@ export default {
           duration: this.formatDuration((segment.duration || 0) / 60),
           mode: segment.mode,
           steps: this.formatSteps(segment.steps || []),
-          transitInfo: null
+          transitInfo: null,
+          isApiFallback: segment.api_fallback || false,
+          fallbackReason: segment.fallback_reason || null
         };
         
-        // 如果是公交模式，添加公交信息
-        if (segment.mode === 'public_transit' && segment.transit_segments) {
-          segmentInfo.transitInfo = this.formatTransitInfo(segment.transit_segments);
+        // 如果是公交模式，优先使用steps数据（已处理过智能判断），其次使用transit_segments
+        if (segment.mode === 'public_transit') {
+          // 优先使用steps数据，因为它已经过智能判断处理
+          if (segment.steps && segment.steps.length > 0) {
+            // 检查steps中是否有非步行的交通方式
+            const hasTransit = segment.steps.some(step => 
+              step.type && ['bus', 'railway', 'taxi'].includes(step.type)
+            );
+            
+            if (hasTransit) {
+              // 如果有公交/地铁/出租车，使用steps数据，不设置transitInfo
+              // 这样会使用mixed-transit-steps模板分支
+              segmentInfo.transitInfo = null;
+            } else if (segment.transit_segments) {
+              // 如果steps都是步行，再尝试使用transit_segments
+              segmentInfo.transitInfo = this.formatTransitInfo(segment.transit_segments);
+            }
+          } else if (segment.transit_segments) {
+            // 如果没有steps，使用transit_segments
+            segmentInfo.transitInfo = this.formatTransitInfo(segment.transit_segments);
+          }
+        }
+        
+        // 如果是API失败的备选方案，添加特殊标记
+        if (segmentInfo.isApiFallback) {
+          segmentInfo.warningMessage = segmentInfo.fallbackReason || '公交路线数据不完整';
         }
         
         return segmentInfo;
@@ -1843,46 +1935,111 @@ export default {
     
     // 格式化步行/驾车指导
     formatSteps(steps) {
-      return steps.map((step, index) => ({
-        index: index + 1,
-        instruction: step.instruction || step.text || '继续前行',
-        distance: this.formatDistance(step.distance || 0),
-        duration: this.formatDuration((step.duration || 0) / 60),
-        road: step.road || ''
-      }));
+      return steps.map((step, index) => {
+        // 检查步骤类型，为公交和地铁步骤添加特殊标识
+        let stepType = 'walking'; // 默认为步行
+        let instruction = step.instruction || step.text || '继续前行';
+        
+        // 根据指导内容判断交通方式
+        if (step.type) {
+          stepType = step.type;
+        } else if (instruction.includes('乘坐') && instruction.includes('路')) {
+          stepType = 'bus';
+        } else if (instruction.includes('乘坐') && instruction.includes('地铁')) {
+          stepType = 'railway';
+        } else if (instruction.includes('步行')) {
+          stepType = 'walking';
+        } else if (instruction.includes('驾车') || instruction.includes('行驶')) {
+          stepType = 'driving';
+        }
+        
+        return {
+          index: index + 1,
+          instruction: instruction,
+          distance: this.formatDistance(step.distance || 0),
+          duration: this.formatDuration((step.duration || 0) / 60),
+          road: step.road || '',
+          type: stepType, // 添加类型信息
+          isApiFallback: step.road === '公交路线' // 检测是否为API失败的备选方案
+        };
+      });
     },
     
     // 格式化公交信息
     formatTransitInfo(transitSegments) {
+      if (!transitSegments || !Array.isArray(transitSegments)) {
+        console.warn('transitSegments 不是有效的数组:', transitSegments);
+        return [];
+      }
+
       return transitSegments.map((segment, index) => {
+        console.log(`处理公交段 ${index}:`, segment);
+        
+        // 处理步行段
         if (segment.walking) {
+          const walkingData = segment.walking;
+          let instruction = '';
+          
+          if (walkingData.steps && walkingData.steps.length > 0) {
+            // 如果有详细步骤，使用第一个步骤的指导
+            instruction = walkingData.steps[0].instruction || '';
+          }
+          
+          if (!instruction) {
+            instruction = `步行${this.formatDistance(walkingData.distance || 0)}`;
+          }
+          
           return {
             type: 'walking',
-            instruction: `步行${this.formatDistance(segment.walking.distance || 0)}`,
-            duration: this.formatDuration((segment.walking.duration || 0) / 60),
-            steps: segment.walking.steps || []
+            instruction: instruction,
+            duration: this.formatDuration((walkingData.duration || 0) / 60),
+            distance: this.formatDistance(walkingData.distance || 0),
+            steps: walkingData.steps || []
           };
-        } else if (segment.bus) {
+        } 
+        
+        // 处理公交车段
+        else if (segment.bus && segment.bus.buslines) {
           return {
             type: 'bus',
             buslines: segment.bus.buslines.map(line => ({
-              name: line.name,
-              departure_stop: line.departure_stop.name,
-              arrival_stop: line.arrival_stop.name,
+              name: line.name || '未知线路',
+              departure_stop: line.departure_stop?.name || '未知站点',
+              arrival_stop: line.arrival_stop?.name || '未知站点',
               via_num: line.via_num || 0,
-              duration: this.formatDuration((line.duration || 0) / 60)
+              duration: this.formatDuration((line.duration || 0) / 60),
+              via_stops: line.via_stops || []
             }))
           };
-        } else if (segment.subway) {
+        } 
+        
+        // 处理地铁段（railway 字段）
+        else if (segment.railway) {
+          const railwayData = segment.railway;
+          
           return {
             type: 'subway',
-            name: segment.subway.name,
-            departure_stop: segment.subway.departure_stop.name,
-            arrival_stop: segment.subway.arrival_stop.name,
-            via_num: segment.subway.via_num || 0,
-            duration: this.formatDuration((segment.subway.duration || 0) / 60)
+            name: railwayData.name || '未知线路',
+            departure_stop: railwayData.departure_stop?.name || '未知站点',
+            arrival_stop: railwayData.arrival_stop?.name || '未知站点',
+            via_num: railwayData.via_num || 0,
+            duration: this.formatDuration((railwayData.duration || 0) / 60),
+            via_stops: railwayData.via_stops || []
           };
         }
+        
+        // 处理出租车段
+        else if (segment.taxi) {
+          const taxiData = segment.taxi;
+          return {
+            type: 'taxi',
+            instruction: `打车${this.formatDistance(taxiData.distance || 0)}`,
+            duration: this.formatDuration((taxiData.duration || 0) / 60),
+            distance: this.formatDistance(taxiData.distance || 0)
+          };
+        }
+        
+        console.warn('未识别的公交段类型:', segment);
         return null;
       }).filter(Boolean);
     },
